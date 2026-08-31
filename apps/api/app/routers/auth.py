@@ -8,7 +8,10 @@ from fastapi import (
     HTTPException,
     Request,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import (
+    JSONResponse,
+    RedirectResponse,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -37,10 +40,7 @@ router = APIRouter(
 
 
 def _secure_cookie() -> bool:
-    return (
-        settings.app_env
-        != "development"
-    )
+    return settings.app_env != "development"
 
 
 @router.get("/google/login")
@@ -58,6 +58,8 @@ def google_login():
         status_code=302,
     )
 
+    # OAuth state cookieはGoogleからAPIへの
+    # top-level redirectで使用するためLaxでOK
     response.set_cookie(
         key=OAUTH_STATE_COOKIE_NAME,
         value=state,
@@ -82,9 +84,7 @@ async def google_callback(
     if error:
         raise HTTPException(
             status_code=401,
-            detail=(
-                f"Google login failed: {error}"
-            ),
+            detail=f"Google login failed: {error}",
         )
 
     if not code:
@@ -144,8 +144,7 @@ async def google_callback(
 
     users = db.scalars(
         select(User).where(
-            func.lower(User.email)
-            == email,
+            func.lower(User.email) == email,
             User.is_active.is_(True),
         )
     ).all()
@@ -170,17 +169,15 @@ async def google_callback(
 
     user = users[0]
 
-    session_token = (
-        create_session_token(
-            user_id=str(user.id),
-            workspace_id=str(
-                user.workspace_id
-            ),
-            email=email,
-            workspace_role=(
-                user.workspace_role.value
-            ),
-        )
+    session_token = create_session_token(
+        user_id=str(user.id),
+        workspace_id=str(
+            user.workspace_id
+        ),
+        email=email,
+        workspace_role=(
+            user.workspace_role.value
+        ),
     )
 
     response = RedirectResponse(
@@ -196,12 +193,15 @@ async def google_callback(
         path="/",
     )
 
+    # WebとAPIが別ホストなので、
+    # credential付きcross-site fetchで送れるよう
+    # SameSite=None + Secureにする
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_token,
         httponly=True,
-        secure=_secure_cookie(),
-        samesite="lax",
+        secure=True,
+        samesite="none",
         max_age=(
             SESSION_EXPIRE_HOURS
             * 60
@@ -277,19 +277,18 @@ def get_current_user(
 
 @router.post("/logout")
 def logout():
-    response = {
-        "ok": True
-    }
-
-    from fastapi.responses import JSONResponse
-
-    result = JSONResponse(
-        content=response
+    response = JSONResponse(
+        content={
+            "ok": True
+        }
     )
 
-    result.delete_cookie(
+    response.delete_cookie(
         key=SESSION_COOKIE_NAME,
         path="/",
+        secure=True,
+        httponly=True,
+        samesite="none",
     )
 
-    return result
+    return response
