@@ -1,12 +1,15 @@
+export const dynamic = "force-dynamic";
+
 type HealthResponse = {
   ok: boolean;
   service: string;
 };
 
 async function getHealth(): Promise<HealthResponse | null> {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  const apiBaseUrl = process.env.API_BASE_URL;
 
   if (!apiBaseUrl) {
+    console.error("API_BASE_URL is not configured.");
     return null;
   }
 
@@ -16,17 +19,24 @@ async function getHealth(): Promise<HealthResponse | null> {
     });
 
     if (!response.ok) {
+      console.error(
+        `Health check failed: ${response.status} ${response.statusText}`
+      );
       return null;
     }
 
-    return await response.json();
-  } catch {
+    const data = (await response.json()) as HealthResponse;
+
+    return data;
+  } catch (error) {
+    console.error("Failed to connect to MIRANOAH API:", error);
     return null;
   }
 }
 
 export default async function Home() {
   const health = await getHealth();
+
   const connected = health?.ok === true;
 
   const cards = [
