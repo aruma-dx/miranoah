@@ -55,7 +55,11 @@ class SlackAPIClient:
                 body = response.read().decode("utf-8")
 
         except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
+            body = exc.read().decode(
+                "utf-8",
+                errors="replace",
+            )
+
             raise SlackAPIError(
                 f"Slack API HTTP error: {exc.code} {body}"
             ) from exc
@@ -74,7 +78,10 @@ class SlackAPIClient:
             ) from exc
 
         if not payload.get("ok"):
-            error = payload.get("error", "unknown_error")
+            error = payload.get(
+                "error",
+                "unknown_error",
+            )
 
             raise SlackAPIError(
                 f"Slack API error on {method}: {error}"
@@ -95,5 +102,20 @@ class SlackAPIClient:
             {
                 "limit": limit,
                 "cursor": cursor,
+            },
+        )
+
+    def conversations_list(
+        self,
+        cursor: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        return self.get(
+            "conversations.list",
+            {
+                "limit": limit,
+                "cursor": cursor,
+                "exclude_archived": "false",
+                "types": "public_channel,private_channel",
             },
         )
