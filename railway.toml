@@ -1,0 +1,6 @@
+# Repository-level documentation only.
+# MIRANOAH uses three Railway services pointing to this same repository:
+# web    -> apps/web/Dockerfile
+# api    -> apps/api/Dockerfile
+# worker -> apps/worker/Dockerfile
+# PostgreSQL and Redis are Railway managed services.
