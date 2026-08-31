@@ -20,38 +20,67 @@ class SlackAPIClient:
         self.token = token or settings.slack_bot_token
 
         if not self.token:
-            raise SlackAPIError("SLACK_BOT_TOKEN is not configured.")
+            raise SlackAPIError(
+                "SLACK_BOT_TOKEN is not configured."
+            )
 
-    def get(
+    def _request(
         self,
         method: str,
+        *,
+        http_method: str,
         params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        query = urlencode(
-            {
-                key: value
-                for key, value in (params or {}).items()
-                if value is not None
-            }
-        )
-
         url = f"{self.BASE_URL}/{method}"
 
-        if query:
-            url = f"{url}?{query}"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json",
+            "User-Agent": "MIRANOAH/0.1",
+        }
+
+        data: bytes | None = None
+
+        if http_method == "GET":
+            query = urlencode(
+                {
+                    key: value
+                    for key, value in (params or {}).items()
+                    if value is not None
+                }
+            )
+
+            if query:
+                url = f"{url}?{query}"
+
+        elif http_method == "POST":
+            headers["Content-Type"] = (
+                "application/json; charset=utf-8"
+            )
+
+            data = json.dumps(
+                json_body or {},
+                ensure_ascii=False,
+            ).encode("utf-8")
+
+        else:
+            raise SlackAPIError(
+                f"Unsupported HTTP method: {http_method}"
+            )
 
         request = Request(
             url=url,
-            method="GET",
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Accept": "application/json",
-                "User-Agent": "MIRANOAH/0.1",
-            },
+            method=http_method,
+            headers=headers,
+            data=data,
         )
 
         try:
-            with urlopen(request, timeout=30) as response:
+            with urlopen(
+                request,
+                timeout=30,
+            ) as response:
                 body = response.read().decode("utf-8")
 
         except HTTPError as exc:
@@ -89,8 +118,32 @@ class SlackAPIClient:
 
         return payload
 
+    def get(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            method,
+            http_method="GET",
+            params=params,
+        )
+
+    def post(
+        self,
+        method: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            method,
+            http_method="POST",
+            json_body=json_body,
+        )
+
     def auth_test(self) -> dict[str, Any]:
-        return self.get("auth.test")
+        return self.get(
+            "auth.test"
+        )
 
     def users_list(
         self,
@@ -118,4 +171,28 @@ class SlackAPIClient:
                 "exclude_archived": "false",
                 "types": "public_channel,private_channel",
             },
+        )
+
+    def chat_post_message(
+        self,
+        *,
+        channel: str,
+        text: str,
+        thread_ts: str | None = None,
+        unfurl_links: bool = False,
+        unfurl_media: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "channel": channel,
+            "text": text,
+            "unfurl_links": unfurl_links,
+            "unfurl_media": unfurl_media,
+        }
+
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+
+        return self.post(
+            "chat.postMessage",
+            payload,
         )
