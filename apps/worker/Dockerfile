@@ -12,12 +12,4 @@ RUN pip install --no-cache-dir .
 
 COPY apps/api/app /app/app
 
-CMD [
-  "dramatiq",
-  "app.jobs.slack",
-  "app.jobs.slack_actions",
-  "--processes",
-  "1",
-  "--threads",
-  "4"
-]
+CMD ["dramatiq", "app.jobs.slack", "app.jobs.slack_actions", "--processes", "1", "--threads", "4"]
