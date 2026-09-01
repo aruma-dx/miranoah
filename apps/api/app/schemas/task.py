@@ -46,6 +46,40 @@ class TaskCreate(BaseModel):
     )
 
 
+class TaskUpdate(BaseModel):
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+    )
+
+    description: str | None = None
+
+    status: TaskStatus | None = None
+    priority: Priority | None = None
+
+    owner_id: UUID | None = None
+
+    due_at: datetime | None = None
+
+    deadline_type: (
+        DeadlineType | None
+    ) = None
+
+    estimated_minutes: int | None = Field(
+        default=None,
+        ge=0,
+    )
+
+    progress: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+    )
+
+    risk_level: RiskLevel | None = None
+
+
 class TaskRead(BaseModel):
     id: UUID
     workspace_id: UUID
