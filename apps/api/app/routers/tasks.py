@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import (
     CurrentUser,
     get_current_user,
-    require_manager_or_admin,
 )
 from app.db.session import get_db
 from app.models.core import (
@@ -26,8 +25,15 @@ from app.models.enums import (
 from app.schemas.task import (
     TaskCreate,
     TaskRead,
+    TaskUpdate,
+)
+from app.services.authorization import (
+    has_global_permission,
+    has_project_permission,
+    has_task_edit_permission,
 )
 from app.services.scopes import (
+    apply_project_view_scope,
     apply_task_view_scope,
 )
 
@@ -97,24 +103,57 @@ def create_task(
     data: TaskCreate,
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(
-        require_manager_or_admin
+        get_current_user
     ),
 ):
     if data.project_id is not None:
-        project = db.get(
-            Project,
-            data.project_id,
+        project_stmt = (
+            select(Project).where(
+                Project.id
+                == data.project_id
+            )
         )
 
-        if (
-            project is None
-            or project.workspace_id
-            != current_user.workspace_id
-        ):
+        project_stmt = (
+            apply_project_view_scope(
+                stmt=project_stmt,
+                current_user=current_user,
+            )
+        )
+
+        project = db.scalar(
+            project_stmt
+        )
+
+        if project is None:
             raise HTTPException(
                 status_code=404,
                 detail="Project not found",
             )
+
+        allowed = (
+            has_project_permission(
+                db=db,
+                current_user=current_user,
+                project_id=project.id,
+                permission="task.create",
+            )
+        )
+
+    else:
+        allowed = (
+            has_global_permission(
+                db=db,
+                current_user=current_user,
+                permission="task.create",
+            )
+        )
+
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permission.",
+        )
 
     if data.requester_id is not None:
         requester = db.get(
@@ -148,13 +187,11 @@ def create_task(
                 detail="Invalid owner.",
             )
 
-    payload = data.model_dump()
-
     task = Task(
         workspace_id=(
             current_user.workspace_id
         ),
-        **payload,
+        **data.model_dump(),
         status=TaskStatus.NOT_STARTED,
     )
 
@@ -192,5 +229,85 @@ def get_task(
             status_code=404,
             detail="Task not found",
         )
+
+    return task
+
+
+@router.patch(
+    "/{task_id}",
+    response_model=TaskRead,
+)
+def update_task(
+    task_id: UUID,
+    data: TaskUpdate,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(
+        get_current_user
+    ),
+):
+    stmt = select(Task).where(
+        Task.id == task_id
+    )
+
+    stmt = apply_task_view_scope(
+        stmt=stmt,
+        current_user=current_user,
+    )
+
+    task = db.scalar(stmt)
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    allowed = (
+        has_task_edit_permission(
+            db=db,
+            task=task,
+            current_user=current_user,
+        )
+    )
+
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permission.",
+        )
+
+    payload = data.model_dump(
+        exclude_unset=True
+    )
+
+    if (
+        "owner_id" in payload
+        and payload["owner_id"]
+        is not None
+    ):
+        owner = db.get(
+            User,
+            payload["owner_id"],
+        )
+
+        if (
+            owner is None
+            or owner.workspace_id
+            != current_user.workspace_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid owner.",
+            )
+
+    for key, value in payload.items():
+        setattr(
+            task,
+            key,
+            value,
+        )
+
+    db.commit()
+    db.refresh(task)
 
     return task
