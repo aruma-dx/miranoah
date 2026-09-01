@@ -28,6 +28,33 @@ class ProjectCreate(BaseModel):
     client_name: str | None = None
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=250,
+    )
+
+    description: str | None = None
+
+    status: ProjectStatus | None = None
+    health: ProjectHealth | None = None
+    priority: Priority | None = None
+
+    owner_id: UUID | None = None
+
+    progress: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+    )
+
+    start_at: datetime | None = None
+    due_at: datetime | None = None
+
+    client_name: str | None = None
+
+
 class ProjectRead(BaseModel):
     id: UUID
     workspace_id: UUID
