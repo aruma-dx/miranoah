@@ -27,6 +27,10 @@ from app.models.enums import (
     RiskLevel,
     TaskStatus,
 )
+from app.services.scopes import (
+    apply_project_view_scope,
+    apply_task_view_scope,
+)
 
 
 router = APIRouter(
@@ -42,10 +46,6 @@ def dashboard_summary(
         get_current_user
     ),
 ):
-    workspace_id = (
-        current_user.workspace_id
-    )
-
     now = datetime.now(
         timezone.utc
     )
@@ -55,31 +55,55 @@ def dashboard_summary(
         TaskStatus.CANCELLED,
     ]
 
-    active_projects = (
-        db.scalar(
-            select(func.count())
-            .select_from(Project)
-            .where(
-                Project.workspace_id
-                == workspace_id,
-                Project.status
-                == ProjectStatus.ACTIVE,
-            )
+    project_stmt = select(
+        func.count()
+    ).select_from(Project)
+
+    project_stmt = (
+        apply_project_view_scope(
+            stmt=project_stmt,
+            current_user=current_user,
         )
+    )
+
+    project_stmt = project_stmt.where(
+        Project.status
+        == ProjectStatus.ACTIVE
+    )
+
+    active_projects = (
+        db.scalar(project_stmt)
         or 0
+    )
+
+    task_base = select(
+        Task.id
+    )
+
+    task_base = apply_task_view_scope(
+        stmt=task_base,
+        current_user=current_user,
+    )
+
+    visible_task_ids = (
+        task_base.subquery()
     )
 
     open_tasks = (
         db.scalar(
             select(func.count())
-            .select_from(Task)
+            .select_from(
+                visible_task_ids
+            )
+            .join(
+                Task,
+                Task.id
+                == visible_task_ids.c.id,
+            )
             .where(
-                Task.workspace_id
-                == workspace_id,
                 Task.status.notin_(
                     closed
-                ),
-                Task.deleted_at.is_(None),
+                )
             )
         )
         or 0
@@ -88,15 +112,19 @@ def dashboard_summary(
     overdue = (
         db.scalar(
             select(func.count())
-            .select_from(Task)
+            .select_from(
+                visible_task_ids
+            )
+            .join(
+                Task,
+                Task.id
+                == visible_task_ids.c.id,
+            )
             .where(
-                Task.workspace_id
-                == workspace_id,
                 Task.status.notin_(
                     closed
                 ),
                 Task.due_at < now,
-                Task.deleted_at.is_(None),
             )
         )
         or 0
@@ -105,17 +133,21 @@ def dashboard_summary(
     high_risk = (
         db.scalar(
             select(func.count())
-            .select_from(Task)
+            .select_from(
+                visible_task_ids
+            )
+            .join(
+                Task,
+                Task.id
+                == visible_task_ids.c.id,
+            )
             .where(
-                Task.workspace_id
-                == workspace_id,
                 Task.risk_level.in_(
                     [
                         RiskLevel.HIGH,
                         RiskLevel.CRITICAL,
                     ]
-                ),
-                Task.deleted_at.is_(None),
+                )
             )
         )
         or 0
