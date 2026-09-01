@@ -19,6 +19,9 @@ from app.schemas.project import (
     ProjectCreate,
     ProjectRead,
 )
+from app.services.scopes import (
+    apply_project_view_scope,
+)
 
 
 router = APIRouter(
@@ -37,15 +40,15 @@ def list_projects(
         get_current_user
     ),
 ):
-    stmt = (
-        select(Project)
-        .where(
-            Project.workspace_id
-            == current_user.workspace_id
-        )
-        .order_by(
-            Project.created_at.desc()
-        )
+    stmt = select(Project)
+
+    stmt = apply_project_view_scope(
+        stmt=stmt,
+        current_user=current_user,
+    )
+
+    stmt = stmt.order_by(
+        Project.created_at.desc()
     )
 
     return list(
@@ -90,16 +93,18 @@ def get_project(
         get_current_user
     ),
 ):
-    project = db.get(
-        Project,
-        project_id,
+    stmt = select(Project).where(
+        Project.id == project_id
     )
 
-    if (
-        project is None
-        or project.workspace_id
-        != current_user.workspace_id
-    ):
+    stmt = apply_project_view_scope(
+        stmt=stmt,
+        current_user=current_user,
+    )
+
+    project = db.scalar(stmt)
+
+    if project is None:
         raise HTTPException(
             status_code=404,
             detail="Project not found",
