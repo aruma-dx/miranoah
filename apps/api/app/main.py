@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.routers.auth import router as auth_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.health import router as health_router
+from app.routers.permissions import router as permissions_router
 from app.routers.projects import router as projects_router
 from app.routers.slack import router as slack_router
 from app.routers.tasks import router as tasks_router
@@ -47,6 +48,10 @@ app.include_router(
 
 app.include_router(
     dashboard_router
+)
+
+app.include_router(
+    permissions_router
 )
 
 
