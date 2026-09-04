@@ -58,6 +58,10 @@ select option {
   color: #f4f5f7;
 }
 
+a {
+  color: inherit;
+}
+
 main {
   width: min(
     1480px,
@@ -159,6 +163,10 @@ h1 {
   letter-spacing: -0.065em;
 }
 
+h2 {
+  letter-spacing: -0.03em;
+}
+
 .tagline {
   max-width: 640px;
   margin: 0;
@@ -173,11 +181,24 @@ h1 {
 .primary-button,
 .secondary-button,
 .panel-create-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  flex-shrink: 0;
+
+  white-space: nowrap;
+  text-decoration: none;
+
   border-radius: 9px;
+
   font-weight: 700;
+  line-height: 1;
+
   transition:
     opacity 0.15s ease,
-    transform 0.15s ease;
+    transform 0.15s ease,
+    background 0.15s ease;
 }
 
 .primary-button {
@@ -206,12 +227,36 @@ h1 {
   color: #f4f5f7;
 
   font-size: 11px;
+
+  text-decoration: none;
+}
+
+.panel-create-button {
+  min-height: 34px;
+  padding: 0 10px;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.1);
+
+  background:
+    rgba(255, 255, 255, 0.06);
+
+  color: #f4f5f7;
+
+  font-size: 10px;
 }
 
 .primary-button:hover,
 .secondary-button:hover,
 .panel-create-button:hover {
   opacity: 0.84;
+}
+
+.secondary-button:hover,
+.panel-create-button:hover {
+  background:
+    rgba(255, 255, 255, 0.08);
 }
 
 .primary-button:active,
@@ -250,6 +295,8 @@ h1 {
   display: flex;
   align-items: center;
   gap: 8px;
+
+  flex-shrink: 0;
 }
 
 /* METRICS */
@@ -400,22 +447,6 @@ h1 {
   font-size: 10px;
   line-height: 1.5;
   opacity: 0.4;
-}
-
-.panel-create-button {
-  min-height: 34px;
-  padding: 0 10px;
-
-  border:
-    1px solid
-    rgba(255, 255, 255, 0.1);
-
-  background:
-    rgba(255, 255, 255, 0.06);
-
-  color: #f4f5f7;
-
-  font-size: 10px;
 }
 
 .count-pill {
@@ -1131,6 +1162,10 @@ h1 {
 }
 
 .auth-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
   border: 0;
 
   padding: 8px 10px;
@@ -1142,6 +1177,10 @@ h1 {
 
   font-size: 10px;
   font-weight: 700;
+
+  line-height: 1;
+
+  white-space: nowrap;
 }
 
 .auth-button.secondary {
