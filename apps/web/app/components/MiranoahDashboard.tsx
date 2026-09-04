@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import {
   FormEvent,
   useCallback,
@@ -359,6 +361,18 @@ export default function MiranoahDashboard({
     loadData();
   }, [loadData]);
 
+  const recentProjects =
+    projects.slice(0, 5);
+
+  const upcomingTasks =
+    tasks
+      .filter(
+        (task) =>
+          task.status !== "DONE" &&
+          task.status !== "CANCELLED"
+      )
+      .slice(0, 5);
+
   function openProjectModal() {
     setError(null);
     setSuccess(null);
@@ -634,8 +648,8 @@ export default function MiranoahDashboard({
           </h2>
 
           <p>
-            Projectを作成し、その中にTaskを登録して
-            仕事の進捗を管理します。
+            Project・Task・期限・リスクの
+            直近状況を確認できます。
           </p>
         </div>
 
@@ -703,101 +717,53 @@ export default function MiranoahDashboard({
         />
       </section>
 
-      <section className="getting-started">
-        <div className="section-kicker">
-          HOW TO USE
-        </div>
-
-        <div className="steps-row">
-          <div className="step-item">
-            <span>1</span>
-
-            <div>
-              <strong>
-                Projectを作る
-              </strong>
-
-              <p>
-                案件や施策単位でProjectを作成します。
-              </p>
-            </div>
-          </div>
-
-          <div className="step-arrow">
-            →
-          </div>
-
-          <div className="step-item">
-            <span>2</span>
-
-            <div>
-              <strong>
-                Taskを登録する
-              </strong>
-
-              <p>
-                Project内の具体的な仕事をTaskとして登録します。
-              </p>
-            </div>
-          </div>
-
-          <div className="step-arrow">
-            →
-          </div>
-
-          <div className="step-item">
-            <span>3</span>
-
-            <div>
-              <strong>
-                状態を更新する
-              </strong>
-
-              <p>
-                未着手・進行中・完了などを更新します。
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section className="workspace-grid">
         <div className="panel">
           <div className="panel-heading">
             <div>
               <div className="section-kicker">
-                PROJECTS
+                RECENT PROJECTS
               </div>
 
               <h3>
-                Project
+                最新のProject
               </h3>
 
               <p className="panel-description">
-                案件・施策・開発など、
-                複数Taskをまとめる単位です。
+                最近作成されたProjectを
+                最大5件表示しています。
               </p>
             </div>
 
-            <button
-              className="panel-create-button"
-              onClick={
-                openProjectModal
-              }
-            >
-              ＋ 作成
-            </button>
+            <div className="welcome-actions">
+              <Link
+                href="/projects"
+                className="secondary-button"
+              >
+                一覧を見る
+              </Link>
+
+              <button
+                className="panel-create-button"
+                onClick={
+                  openProjectModal
+                }
+              >
+                ＋ 作成
+              </button>
+            </div>
           </div>
 
           <div className="list">
-            {projects.length === 0 && (
+            {recentProjects.length ===
+              0 && (
               <div className="empty-state enhanced">
                 <strong>
                   Projectがありません
                 </strong>
 
                 <p>
-                  まず最初のProjectを作ってみましょう。
+                  まず最初のProjectを作成しましょう。
                 </p>
 
                 <button
@@ -811,7 +777,7 @@ export default function MiranoahDashboard({
               </div>
             )}
 
-            {projects.map(
+            {recentProjects.map(
               (project) => {
                 const projectTaskCount =
                   tasks.filter(
@@ -849,6 +815,7 @@ export default function MiranoahDashboard({
                         <span>
                           Task
                         </span>
+
                         <strong>
                           {
                             projectTaskCount
@@ -861,6 +828,7 @@ export default function MiranoahDashboard({
                         <span>
                           進捗
                         </span>
+
                         <strong>
                           {
                             project.progress
@@ -873,6 +841,7 @@ export default function MiranoahDashboard({
                         <span>
                           期限
                         </span>
+
                         <strong>
                           {dateLabel(
                             project.due_at
@@ -918,26 +887,36 @@ export default function MiranoahDashboard({
           <div className="panel-heading">
             <div>
               <div className="section-kicker">
-                TASKS
+                UPCOMING TASKS
               </div>
 
               <h3>
-                Task
+                直近のTask
               </h3>
 
               <p className="panel-description">
-                実際に誰かが対応する具体的な仕事です。
+                期限が近い未完了Taskを
+                最大5件表示しています。
               </p>
             </div>
 
-            <button
-              className="panel-create-button"
-              onClick={() =>
-                openTaskModal()
-              }
-            >
-              ＋ 作成
-            </button>
+            <div className="welcome-actions">
+              <Link
+                href="/tasks"
+                className="secondary-button"
+              >
+                一覧を見る
+              </Link>
+
+              <button
+                className="panel-create-button"
+                onClick={() =>
+                  openTaskModal()
+                }
+              >
+                ＋ 作成
+              </button>
+            </div>
           </div>
 
           <div className="task-table-header">
@@ -948,14 +927,15 @@ export default function MiranoahDashboard({
           </div>
 
           <div className="list">
-            {tasks.length === 0 && (
+            {upcomingTasks.length ===
+              0 && (
               <div className="empty-state enhanced">
                 <strong>
-                  Taskがありません
+                  未完了Taskがありません
                 </strong>
 
                 <p>
-                  Project内で行う仕事をTaskとして登録します。
+                  新しいTaskを登録してみましょう。
                 </p>
 
                 <button
@@ -969,81 +949,83 @@ export default function MiranoahDashboard({
               </div>
             )}
 
-            {tasks.map((task) => {
-              const project =
-                projects.find(
-                  (item) =>
-                    item.id ===
-                    task.project_id
-                );
+            {upcomingTasks.map(
+              (task) => {
+                const project =
+                  projects.find(
+                    (item) =>
+                      item.id ===
+                      task.project_id
+                  );
 
-              return (
-                <article
-                  className="task-row"
-                  key={task.id}
-                >
-                  <div className="task-main">
-                    <strong>
-                      {task.title}
-                    </strong>
+                return (
+                  <article
+                    className="task-row"
+                    key={task.id}
+                  >
+                    <div className="task-main">
+                      <strong>
+                        {task.title}
+                      </strong>
 
-                    <span>
-                      {project?.name ??
-                        "Projectなし"}
-                      {" ・ "}
-                      {dateLabel(
-                        task.due_at
+                      <span>
+                        {project?.name ??
+                          "Projectなし"}
+                        {" ・ "}
+                        {dateLabel(
+                          task.due_at
+                        )}
+                      </span>
+                    </div>
+
+                    <span className="priority-badge">
+                      {priorityLabel(
+                        task.priority
                       )}
                     </span>
-                  </div>
 
-                  <span className="priority-badge">
-                    {priorityLabel(
-                      task.priority
-                    )}
-                  </span>
+                    <span
+                      className={
+                        task.risk_level ===
+                          "HIGH" ||
+                        task.risk_level ===
+                          "CRITICAL"
+                          ? "risk-badge danger"
+                          : "risk-badge"
+                      }
+                    >
+                      {riskLabel(
+                        task.risk_level
+                      )}
+                    </span>
 
-                  <span
-                    className={
-                      task.risk_level ===
-                        "HIGH" ||
-                      task.risk_level ===
-                        "CRITICAL"
-                        ? "risk-badge danger"
-                        : "risk-badge"
-                    }
-                  >
-                    {riskLabel(
-                      task.risk_level
-                    )}
-                  </span>
-
-                  <select
-                    className="status-select"
-                    value={task.status}
-                    onChange={(event) =>
-                      updateTaskStatus(
-                        task.id,
-                        event.target.value
-                      )
-                    }
-                  >
-                    {TASK_STATUSES.map(
-                      (status) => (
-                        <option
-                          value={status}
-                          key={status}
-                        >
-                          {taskStatusLabel(
-                            status
-                          )}
-                        </option>
-                      )
-                    )}
-                  </select>
-                </article>
-              );
-            })}
+                    <select
+                      className="status-select"
+                      value={task.status}
+                      onChange={(event) =>
+                        updateTaskStatus(
+                          task.id,
+                          event.target.value
+                        )
+                      }
+                    >
+                      {TASK_STATUSES.map(
+                        (status) => (
+                          <option
+                            value={status}
+                            key={status}
+                          >
+                            {taskStatusLabel(
+                              status
+                            )}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </article>
+                );
+              }
+            )}
           </div>
         </div>
       </section>
@@ -1119,7 +1101,7 @@ export default function MiranoahDashboard({
 
                 <p>
                   案件・施策・開発など、
-                  複数のTaskをまとめる単位を作成します。
+                  複数のTaskをまとめる単位です。
                 </p>
               </div>
 
@@ -1171,7 +1153,7 @@ export default function MiranoahDashboard({
                       event.target.value
                     )
                   }
-                  placeholder="このProjectで何を行うか簡単に入力"
+                  placeholder="このProjectで何を行うか入力"
                 />
               </label>
 
@@ -1194,12 +1176,8 @@ export default function MiranoahDashboard({
                     {PRIORITIES.map(
                       (priority) => (
                         <option
-                          value={
-                            priority
-                          }
-                          key={
-                            priority
-                          }
+                          value={priority}
+                          key={priority}
                         >
                           {priorityLabel(
                             priority
@@ -1334,10 +1312,6 @@ export default function MiranoahDashboard({
                     )
                   )}
                 </select>
-
-                <small className="field-help">
-                  Projectカードの「Taskを追加」から開くと自動選択されます。
-                </small>
               </label>
 
               <label className="form-field">
@@ -1477,7 +1451,10 @@ function MetricCard({
       }
     >
       <span>{label}</span>
-      <strong>{value}</strong>
+
+      <strong>
+        {value}
+      </strong>
     </div>
   );
 }
