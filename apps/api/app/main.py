@@ -9,6 +9,7 @@ from app.routers.permissions import router as permissions_router
 from app.routers.projects import router as projects_router
 from app.routers.slack import router as slack_router
 from app.routers.tasks import router as tasks_router
+from app.routers.teams import router as teams_router
 
 
 app = FastAPI(
@@ -44,6 +45,10 @@ app.include_router(
 
 app.include_router(
     tasks_router
+)
+
+app.include_router(
+    teams_router
 )
 
 app.include_router(
