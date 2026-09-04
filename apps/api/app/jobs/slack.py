@@ -1,22 +1,42 @@
 import json
 import re
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 from typing import Any
+from uuid import UUID
 
 import dramatiq
-from dramatiq.brokers.redis import RedisBroker
+from dramatiq.brokers.redis import (
+    RedisBroker,
+)
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import (
+    IntegrityError,
+)
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.core import (
+    Project,
     SlackChannel,
     SlackMessage,
+    Task,
+    TaskAssignee,
+    User,
     Workspace,
 )
-from app.models.enums import MonitoringPolicy
+from app.models.enums import (
+    DeadlineType,
+    MonitoringPolicy,
+    Priority,
+    TaskStatus,
+)
+from app.services.ai_task_detector import (
+    detect_task_from_slack_message,
+)
 
 
 broker = RedisBroker(
@@ -26,6 +46,7 @@ broker = RedisBroker(
 dramatiq.set_broker(
     broker
 )
+
 
 URL_RE = re.compile(
     r"https?://",
@@ -49,6 +70,15 @@ SYSTEM_MESSAGE_SUBTYPES = {
     "unpinned_item",
     "ekm_access_denied",
 }
+
+
+AI_ENABLED_POLICIES = {
+    MonitoringPolicy.MONITOR_FULL,
+    MonitoringPolicy.MONITOR_TASK_ONLY,
+}
+
+
+AUTO_CREATE_THRESHOLD = 0.90
 
 
 def _now() -> datetime:
@@ -81,7 +111,10 @@ def _is_bot_message(
     if message.get("bot_id"):
         return True
 
-    if message.get("subtype") == "bot_message":
+    if (
+        message.get("subtype")
+        == "bot_message"
+    ):
         return True
 
     return False
@@ -105,12 +138,12 @@ def _has_meaningful_content(
     )
 
 
-def _channel_is_ignored(
+def _get_channel(
     db: Session,
     workspace_id,
     channel_id: str,
-) -> bool:
-    channel = db.scalar(
+) -> SlackChannel | None:
+    return db.scalar(
         select(
             SlackChannel
         ).where(
@@ -121,12 +154,48 @@ def _channel_is_ignored(
         )
     )
 
+
+def _channel_is_ignored(
+    db: Session,
+    workspace_id,
+    channel_id: str,
+) -> bool:
+    channel = _get_channel(
+        db=db,
+        workspace_id=workspace_id,
+        channel_id=channel_id,
+    )
+
     if channel is None:
         return False
 
     return (
         channel.monitoring_policy
         == MonitoringPolicy.IGNORE
+    )
+
+
+def _channel_ai_enabled(
+    *,
+    db: Session,
+    message: SlackMessage,
+) -> bool:
+    channel = _get_channel(
+        db=db,
+        workspace_id=(
+            message.workspace_id
+        ),
+        channel_id=(
+            message.slack_channel_id
+        ),
+    )
+
+    if channel is None:
+        return True
+
+    return (
+        channel.monitoring_policy
+        in AI_ENABLED_POLICIES
     )
 
 
@@ -157,30 +226,33 @@ def _create_message(
     channel_id: str,
     message: dict[str, Any],
     payload: dict[str, Any],
-) -> None:
+) -> UUID | None:
     message_ts = message.get(
         "ts"
     )
 
     if not message_ts:
-        return
+        return None
 
     if _is_bot_message(
         message
     ):
-        return
+        return None
 
     subtype = message.get(
         "subtype"
     )
 
-    if subtype in SYSTEM_MESSAGE_SUBTYPES:
-        return
+    if (
+        subtype
+        in SYSTEM_MESSAGE_SUBTYPES
+    ):
+        return None
 
     if not _has_meaningful_content(
         message
     ):
-        return
+        return None
 
     existing = _find_message(
         db=db,
@@ -190,7 +262,7 @@ def _create_message(
     )
 
     if existing is not None:
-        return
+        return existing.id
 
     text = (
         message.get("text")
@@ -230,12 +302,26 @@ def _create_message(
 
     try:
         db.commit()
+        db.refresh(
+            slack_message
+        )
+
+        return slack_message.id
 
     except IntegrityError:
-        # Slack can redeliver the same event,
-        # and multiple workers may process it concurrently.
-        # The DB unique constraint is the final idempotency guard.
         db.rollback()
+
+        existing = _find_message(
+            db=db,
+            workspace_id=workspace_id,
+            channel_id=channel_id,
+            message_ts=message_ts,
+        )
+
+        if existing is None:
+            return None
+
+        return existing.id
 
 
 def _update_message(
@@ -245,7 +331,7 @@ def _update_message(
     channel_id: str,
     event: dict[str, Any],
     payload: dict[str, Any],
-) -> None:
+) -> UUID | None:
     message = (
         event.get("message")
         or {}
@@ -255,19 +341,19 @@ def _update_message(
         message,
         dict,
     ):
-        return
+        return None
 
     if _is_bot_message(
         message
     ):
-        return
+        return None
 
     message_ts = message.get(
         "ts"
     )
 
     if not message_ts:
-        return
+        return None
 
     existing = _find_message(
         db=db,
@@ -276,23 +362,19 @@ def _update_message(
         message_ts=message_ts,
     )
 
-    # If MIRANOAH never received the original message,
-    # an edit event can still be used to create the current version.
     if existing is None:
         if not _has_meaningful_content(
             message
         ):
-            return
+            return None
 
-        _create_message(
+        return _create_message(
             db=db,
             workspace_id=workspace_id,
             channel_id=channel_id,
             message=message,
             payload=payload,
         )
-
-        return
 
     text = (
         message.get("text")
@@ -326,13 +408,13 @@ def _update_message(
 
     existing.edited_at = _now()
 
-    # Edited messages must be analyzed again
-    # by the future AI pipeline.
     existing.processed = False
 
     existing.updated_at = _now()
 
     db.commit()
+
+    return existing.id
 
 
 def _delete_message(
@@ -375,9 +457,6 @@ def _delete_message(
         message_ts=message_ts,
     )
 
-    # Do not create empty tombstone records.
-    # If the original message does not exist,
-    # there is nothing useful to soft-delete.
     if existing is None:
         return
 
@@ -391,42 +470,327 @@ def _delete_message(
         )
     )
 
-    # Future AI reconciliation needs to know
-    # that the source message was deleted.
     existing.processed = False
-
     existing.updated_at = now
 
     db.commit()
 
 
+def _resolve_user(
+    *,
+    db: Session,
+    workspace_id,
+    slack_user_id: str | None,
+) -> User | None:
+    if not slack_user_id:
+        return None
+
+    return db.scalar(
+        select(User).where(
+            User.workspace_id
+            == workspace_id,
+            User.slack_user_id
+            == slack_user_id,
+            User.is_active.is_(True),
+        )
+    )
+
+
+def _resolve_project(
+    *,
+    db: Session,
+    workspace_id,
+    project_id: str | None,
+) -> Project | None:
+    if not project_id:
+        return None
+
+    try:
+        project_uuid = UUID(
+            project_id
+        )
+    except ValueError:
+        return None
+
+    project = db.get(
+        Project,
+        project_uuid,
+    )
+
+    if (
+        project is None
+        or project.workspace_id
+        != workspace_id
+    ):
+        return None
+
+    return project
+
+
+def _task_fingerprint(
+    message: SlackMessage,
+) -> str:
+    return (
+        f"slack:{message.id}"
+    )
+
+
 @dramatiq.actor(
-    actor_name="process_slack_event",
+    actor_name=(
+        "analyze_slack_message"
+    ),
+    max_retries=3,
+    min_backoff=2000,
+)
+def analyze_slack_message(
+    slack_message_id: str,
+) -> None:
+    try:
+        message_uuid = UUID(
+            slack_message_id
+        )
+    except ValueError:
+        return
+
+    with SessionLocal() as db:
+        message = db.get(
+            SlackMessage,
+            message_uuid,
+        )
+
+        if message is None:
+            return
+
+        if message.deleted_at is not None:
+            return
+
+        if message.processed:
+            return
+
+        if not (
+            message.text
+            or ""
+        ).strip():
+            message.processed = True
+            db.commit()
+            return
+
+        if not _channel_ai_enabled(
+            db=db,
+            message=message,
+        ):
+            message.processed = True
+            db.commit()
+            return
+
+        if not settings.openai_api_key:
+            print(
+                "[MIRANOAH AI] "
+                "OPENAI_API_KEY is missing."
+            )
+            return
+
+        fingerprint = (
+            _task_fingerprint(
+                message
+            )
+        )
+
+        existing_task = db.scalar(
+            select(Task).where(
+                Task.workspace_id
+                == message.workspace_id,
+                Task.task_fingerprint
+                == fingerprint,
+            )
+        )
+
+        if existing_task is not None:
+            message.processed = True
+            db.commit()
+            return
+
+        result = (
+            detect_task_from_slack_message(
+                db=db,
+                message=message,
+            )
+        )
+
+        print(
+            "[MIRANOAH AI] "
+            f"message={message.id} "
+            f"is_task={result.is_task} "
+            f"confidence={result.confidence}"
+        )
+
+        if not result.is_task:
+            message.processed = True
+            db.commit()
+            return
+
+        if (
+            result.confidence
+            < AUTO_CREATE_THRESHOLD
+        ):
+            print(
+                "[MIRANOAH AI] "
+                "Skipped because confidence "
+                "is below auto-create threshold."
+            )
+
+            message.processed = True
+            db.commit()
+            return
+
+        if (
+            result.deadline_type
+            == "AI_INFERRED"
+        ):
+            print(
+                "[MIRANOAH AI] "
+                "Skipped because deadline "
+                "requires review."
+            )
+
+            message.processed = True
+            db.commit()
+            return
+
+        if not result.title:
+            message.processed = True
+            db.commit()
+            return
+
+        requester = _resolve_user(
+            db=db,
+            workspace_id=(
+                message.workspace_id
+            ),
+            slack_user_id=(
+                message.slack_user_id
+            ),
+        )
+
+        owner = _resolve_user(
+            db=db,
+            workspace_id=(
+                message.workspace_id
+            ),
+            slack_user_id=(
+                result
+                .assignee_slack_user_id
+            ),
+        )
+
+        project = _resolve_project(
+            db=db,
+            workspace_id=(
+                message.workspace_id
+            ),
+            project_id=(
+                result.project_id
+            ),
+        )
+
+        try:
+            priority = Priority(
+                result.priority
+            )
+        except ValueError:
+            priority = (
+                Priority.MEDIUM
+            )
+
+        deadline_type = None
+
+        if result.deadline_type:
+            try:
+                deadline_type = (
+                    DeadlineType(
+                        result.deadline_type
+                    )
+                )
+            except ValueError:
+                deadline_type = None
+
+        task = Task(
+            workspace_id=(
+                message.workspace_id
+            ),
+            project_id=(
+                project.id
+                if project
+                else None
+            ),
+            title=result.title,
+            description=(
+                result.description
+            ),
+            status=(
+                TaskStatus.NOT_STARTED
+            ),
+            priority=priority,
+            requester_id=(
+                requester.id
+                if requester
+                else None
+            ),
+            owner_id=(
+                owner.id
+                if owner
+                else None
+            ),
+            due_at=result.due_at,
+            deadline_type=(
+                deadline_type
+            ),
+            deadline_confidence=(
+                result
+                .deadline_confidence
+            ),
+            ai_generated=True,
+            ai_confidence=(
+                result.confidence
+            ),
+            task_fingerprint=(
+                fingerprint
+            ),
+        )
+
+        db.add(task)
+        db.flush()
+
+        if owner is not None:
+            db.add(
+                TaskAssignee(
+                    task_id=task.id,
+                    user_id=owner.id,
+                )
+            )
+
+        message.processed = True
+
+        db.commit()
+
+        print(
+            "[MIRANOAH AI] "
+            f"Task created: "
+            f"{task.id} "
+            f"{task.title}"
+        )
+
+
+@dramatiq.actor(
+    actor_name=(
+        "process_slack_event"
+    ),
     max_retries=5,
     min_backoff=1000,
 )
 def process_slack_event(
     payload: dict,
 ) -> None:
-    """
-    Normalize and persist Slack message events.
-
-    Supported:
-    - normal messages
-    - thread messages
-    - file messages
-    - message_changed
-    - message_deleted
-    - Slack retries
-
-    Ignored:
-    - DMs
-    - bot/app messages
-    - system messages
-    - empty messages
-    - channels configured as IGNORE
-    """
-
     event = (
         payload.get("event")
         or {}
@@ -447,14 +811,20 @@ def process_slack_event(
     ):
         return
 
-    if event.get("type") != "message":
+    if (
+        event.get("type")
+        != "message"
+    ):
         return
 
     channel_id = event.get(
         "channel"
     )
 
-    if not team_id or not channel_id:
+    if (
+        not team_id
+        or not channel_id
+    ):
         return
 
     with SessionLocal() as db:
@@ -472,7 +842,9 @@ def process_slack_event(
 
         if _channel_is_ignored(
             db=db,
-            workspace_id=workspace.id,
+            workspace_id=(
+                workspace.id
+            ),
             channel_id=channel_id,
         ):
             return
@@ -481,35 +853,70 @@ def process_slack_event(
             "subtype"
         )
 
-        if subtype == "message_changed":
-            _update_message(
-                db=db,
-                workspace_id=workspace.id,
-                channel_id=channel_id,
-                event=event,
-                payload=payload,
+        if (
+            subtype
+            == "message_changed"
+        ):
+            message_id = (
+                _update_message(
+                    db=db,
+                    workspace_id=(
+                        workspace.id
+                    ),
+                    channel_id=(
+                        channel_id
+                    ),
+                    event=event,
+                    payload=payload,
+                )
             )
+
+            if message_id:
+                analyze_slack_message.send(
+                    str(message_id)
+                )
 
             return
 
-        if subtype == "message_deleted":
+        if (
+            subtype
+            == "message_deleted"
+        ):
             _delete_message(
                 db=db,
-                workspace_id=workspace.id,
-                channel_id=channel_id,
+                workspace_id=(
+                    workspace.id
+                ),
+                channel_id=(
+                    channel_id
+                ),
                 event=event,
                 payload=payload,
             )
 
             return
 
-        if subtype in SYSTEM_MESSAGE_SUBTYPES:
+        if (
+            subtype
+            in SYSTEM_MESSAGE_SUBTYPES
+        ):
             return
 
-        _create_message(
-            db=db,
-            workspace_id=workspace.id,
-            channel_id=channel_id,
-            message=event,
-            payload=payload,
+        message_id = (
+            _create_message(
+                db=db,
+                workspace_id=(
+                    workspace.id
+                ),
+                channel_id=(
+                    channel_id
+                ),
+                message=event,
+                payload=payload,
+            )
         )
+
+        if message_id:
+            analyze_slack_message.send(
+                str(message_id)
+            )
