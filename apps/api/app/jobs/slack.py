@@ -79,6 +79,7 @@ AI_ENABLED_POLICIES = {
 
 
 AUTO_CREATE_THRESHOLD = 0.90
+REVIEW_MIN_THRESHOLD = 0.60
 
 
 def _now() -> datetime:
