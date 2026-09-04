@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from app.models.enums import (
     Priority,
     ProjectHealth,
+    ProjectRole,
     ProjectStatus,
 )
 
@@ -17,14 +18,10 @@ class ProjectCreate(BaseModel):
     )
 
     description: str | None = None
-
     priority: Priority = Priority.MEDIUM
-
     owner_id: UUID | None = None
-
     start_at: datetime | None = None
     due_at: datetime | None = None
-
     client_name: str | None = None
 
 
@@ -36,11 +33,9 @@ class ProjectUpdate(BaseModel):
     )
 
     description: str | None = None
-
     status: ProjectStatus | None = None
     health: ProjectHealth | None = None
     priority: Priority | None = None
-
     owner_id: UUID | None = None
 
     progress: int | None = Field(
@@ -51,30 +46,39 @@ class ProjectUpdate(BaseModel):
 
     start_at: datetime | None = None
     due_at: datetime | None = None
-
     client_name: str | None = None
 
 
 class ProjectRead(BaseModel):
     id: UUID
     workspace_id: UUID
-
     name: str
     description: str | None
-
     status: ProjectStatus
     health: ProjectHealth
     priority: Priority
-
     owner_id: UUID | None
-
     progress: int
-
     start_at: datetime | None
     due_at: datetime | None
-
     client_name: str | None
 
     model_config = {
-        "from_attributes": True
+        "from_attributes": True,
+    }
+
+
+class ProjectMemberCreate(BaseModel):
+    user_id: UUID
+    role: ProjectRole = ProjectRole.MEMBER
+
+
+class ProjectMemberRead(BaseModel):
+    id: UUID
+    project_id: UUID
+    user_id: UUID
+    role: ProjectRole
+
+    model_config = {
+        "from_attributes": True,
     }
