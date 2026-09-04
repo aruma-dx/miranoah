@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.core import (
@@ -33,9 +33,12 @@ ROLE_DEFAULTS: dict[
     },
 
     WorkspaceRole.MANAGER: {
+        "team.view",
+
         "project.view",
         "project.create",
         "project.edit",
+        "project.member.manage",
 
         "task.view",
         "task.create",
@@ -60,6 +63,8 @@ ROLE_DEFAULTS: dict[
     },
 
     WorkspaceRole.PLAYER: {
+        "team.view",
+
         "project.view",
 
         "task.view",
@@ -74,6 +79,11 @@ ROLE_DEFAULTS: dict[
 
 
 TEAM_MANAGER_PERMISSIONS = {
+    "team.view",
+    "team.edit",
+    "team.member.manage",
+    "team.project.manage",
+
     "project.view",
     "project.create",
     "project.edit",
@@ -104,6 +114,7 @@ TEAM_MANAGER_PERMISSIONS = {
 PROJECT_MANAGER_PERMISSIONS = {
     "project.view",
     "project.edit",
+    "project.member.manage",
 
     "task.view",
     "task.create",
@@ -121,6 +132,8 @@ PROJECT_MANAGER_PERMISSIONS = {
 
     "ai_review.view",
     "ai_review.approve",
+
+    "member.view",
 }
 
 
@@ -128,13 +141,13 @@ PROJECT_MEMBER_PERMISSIONS = {
     "project.view",
     "task.view",
     "todo.view",
+    "member.view",
 }
 
 
 @dataclass(frozen=True)
 class PermissionContext:
     workspace_role: WorkspaceRole
-
     team_role: TeamRole | None = None
     project_role: ProjectRole | None = None
 
@@ -217,8 +230,6 @@ def _load_matching_overrides(
 
     conditions = []
 
-    from sqlalchemy import and_, or_
-
     for scope in scopes:
         if scope.scope_id is None:
             conditions.append(
@@ -271,15 +282,6 @@ def has_permission(
     scopes: list[PermissionScope]
     | None = None,
 ) -> bool:
-    """
-    Effective permission precedence:
-
-    1. Explicit DENY
-    2. Explicit ALLOW
-    3. Role defaults
-    4. DENY
-    """
-
     effective_scopes = [
         PermissionScope(
             scope_type=SCOPE_GLOBAL,
@@ -292,17 +294,14 @@ def has_permission(
             scopes
         )
 
-    overrides = (
-        _load_matching_overrides(
-            db=db,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            permission=permission,
-            scopes=effective_scopes,
-        )
+    overrides = _load_matching_overrides(
+        db=db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        permission=permission,
+        scopes=effective_scopes,
     )
 
-    # 1. Explicit DENY always wins.
     for override in overrides:
         if (
             override.effect
@@ -310,7 +309,6 @@ def has_permission(
         ):
             return False
 
-    # 2. Explicit ALLOW.
     for override in overrides:
         if (
             override.effect
@@ -318,12 +316,10 @@ def has_permission(
         ):
             return True
 
-    # 3. Role default.
     if _role_default_allows(
         permission=permission,
         ctx=ctx,
     ):
         return True
 
-    # 4. Default deny.
     return False
