@@ -57,6 +57,11 @@ type Team = {
   description: string | null;
 };
 
+type ModalType =
+  | "project"
+  | "task"
+  | null;
+
 const TASK_STATUSES = [
   "NOT_STARTED",
   "IN_PROGRESS",
@@ -69,13 +74,21 @@ const TASK_STATUSES = [
   "CANCELLED",
 ];
 
-function statusLabel(
+const PRIORITIES = [
+  "LOW",
+  "MEDIUM",
+  "HIGH",
+  "CRITICAL",
+];
+
+function taskStatusLabel(
   status: string
 ) {
   const labels: Record<
     string,
     string
   > = {
+    CANDIDATE: "候補",
     NOT_STARTED: "未着手",
     IN_PROGRESS: "進行中",
     WAITING_REVIEW: "レビュー待ち",
@@ -85,10 +98,60 @@ function statusLabel(
     ON_HOLD: "保留",
     DONE: "完了",
     CANCELLED: "キャンセル",
-    CANDIDATE: "候補",
   };
 
   return labels[status] ?? status;
+}
+
+function projectStatusLabel(
+  status: string
+) {
+  const labels: Record<
+    string,
+    string
+  > = {
+    PLANNING: "計画中",
+    ACTIVE: "進行中",
+    ON_HOLD: "保留",
+    BLOCKED: "ブロック",
+    COMPLETED: "完了",
+    CANCELLED: "キャンセル",
+    ARCHIVED: "アーカイブ",
+  };
+
+  return labels[status] ?? status;
+}
+
+function priorityLabel(
+  priority: string
+) {
+  const labels: Record<
+    string,
+    string
+  > = {
+    LOW: "低",
+    MEDIUM: "中",
+    HIGH: "高",
+    CRITICAL: "最優先",
+  };
+
+  return labels[priority] ?? priority;
+}
+
+function riskLabel(
+  risk: string
+) {
+  const labels: Record<
+    string,
+    string
+  > = {
+    LOW: "低",
+    MEDIUM: "中",
+    HIGH: "高",
+    CRITICAL: "重大",
+  };
+
+  return labels[risk] ?? risk;
 }
 
 function dateLabel(
@@ -101,10 +164,9 @@ function dateLabel(
   return new Intl.DateTimeFormat(
     "ja-JP",
     {
+      year: "numeric",
       month: "numeric",
       day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
     }
   ).format(new Date(value));
 }
@@ -135,6 +197,12 @@ export default function MiranoahDashboard({
   const [error, setError] =
     useState<string | null>(null);
 
+  const [success, setSuccess] =
+    useState<string | null>(null);
+
+  const [modal, setModal] =
+    useState<ModalType>(null);
+
   const [projectName, setProjectName] =
     useState("");
 
@@ -143,26 +211,55 @@ export default function MiranoahDashboard({
     setProjectDescription,
   ] = useState("");
 
+  const [
+    projectPriority,
+    setProjectPriority,
+  ] = useState("MEDIUM");
+
+  const [
+    projectDueAt,
+    setProjectDueAt,
+  ] = useState("");
+
   const [taskTitle, setTaskTitle] =
     useState("");
+
+  const [
+    taskDescription,
+    setTaskDescription,
+  ] = useState("");
 
   const [
     taskProjectId,
     setTaskProjectId,
   ] = useState("");
 
-  const [creatingProject, setCreatingProject] =
-    useState(false);
+  const [
+    taskPriority,
+    setTaskPriority,
+  ] = useState("MEDIUM");
 
-  const [creatingTask, setCreatingTask] =
-    useState(false);
+  const [
+    taskDueAt,
+    setTaskDueAt,
+  ] = useState("");
+
+  const [
+    creatingProject,
+    setCreatingProject,
+  ] = useState(false);
+
+  const [
+    creatingTask,
+    setCreatingTask,
+  ] = useState(false);
 
   const apiFetch = useCallback(
     async (
       path: string,
       options?: RequestInit
     ) => {
-      const response = await fetch(
+      return fetch(
         `${apiBaseUrl}${path}`,
         {
           ...options,
@@ -175,8 +272,6 @@ export default function MiranoahDashboard({
           },
         }
       );
-
-      return response;
     },
     [apiBaseUrl]
   );
@@ -193,7 +288,6 @@ export default function MiranoahDashboard({
 
         if (!meResponse.ok) {
           setUser(null);
-          setLoading(false);
           return;
         }
 
@@ -265,12 +359,63 @@ export default function MiranoahDashboard({
     loadData();
   }, [loadData]);
 
+  function openProjectModal() {
+    setError(null);
+    setSuccess(null);
+
+    setProjectName("");
+    setProjectDescription("");
+    setProjectPriority("MEDIUM");
+    setProjectDueAt("");
+
+    setModal("project");
+  }
+
+  function openTaskModal(
+    projectId = ""
+  ) {
+    setError(null);
+    setSuccess(null);
+
+    setTaskTitle("");
+    setTaskDescription("");
+    setTaskProjectId(projectId);
+    setTaskPriority("MEDIUM");
+    setTaskDueAt("");
+
+    setModal("task");
+  }
+
+  function closeModal() {
+    if (
+      creatingProject ||
+      creatingTask
+    ) {
+      return;
+    }
+
+    setModal(null);
+  }
+
+  function showSuccess(
+    message: string
+  ) {
+    setSuccess(message);
+
+    window.setTimeout(() => {
+      setSuccess(null);
+    }, 4000);
+  }
+
   async function createProject(
     event: FormEvent
   ) {
     event.preventDefault();
 
     if (!projectName.trim()) {
+      setError(
+        "Project名を入力してください。"
+      );
       return;
     }
 
@@ -287,16 +432,23 @@ export default function MiranoahDashboard({
             description:
               projectDescription.trim() ||
               null,
-            priority: "MEDIUM",
+            priority:
+              projectPriority,
+            due_at:
+              projectDueAt
+                ? new Date(
+                    `${projectDueAt}T23:59:59`
+                  ).toISOString()
+                : null,
           }),
         }
       );
 
       if (!response.ok) {
         const body =
-          await response.json().catch(
-            () => null
-          );
+          await response
+            .json()
+            .catch(() => null);
 
         throw new Error(
           body?.detail ??
@@ -304,8 +456,11 @@ export default function MiranoahDashboard({
         );
       }
 
-      setProjectName("");
-      setProjectDescription("");
+      setModal(null);
+
+      showSuccess(
+        `「${projectName.trim()}」を作成しました。`
+      );
 
       await loadData();
     } catch (err) {
@@ -325,6 +480,9 @@ export default function MiranoahDashboard({
     event.preventDefault();
 
     if (!taskTitle.trim()) {
+      setError(
+        "Task名を入力してください。"
+      );
       return;
     }
 
@@ -338,18 +496,28 @@ export default function MiranoahDashboard({
           method: "POST",
           body: JSON.stringify({
             title: taskTitle.trim(),
+            description:
+              taskDescription.trim() ||
+              null,
             project_id:
               taskProjectId || null,
-            priority: "MEDIUM",
+            priority:
+              taskPriority,
+            due_at:
+              taskDueAt
+                ? new Date(
+                    `${taskDueAt}T23:59:59`
+                  ).toISOString()
+                : null,
           }),
         }
       );
 
       if (!response.ok) {
         const body =
-          await response.json().catch(
-            () => null
-          );
+          await response
+            .json()
+            .catch(() => null);
 
         throw new Error(
           body?.detail ??
@@ -357,8 +525,11 @@ export default function MiranoahDashboard({
         );
       }
 
-      setTaskTitle("");
-      setTaskProjectId("");
+      setModal(null);
+
+      showSuccess(
+        `「${taskTitle.trim()}」を作成しました。`
+      );
 
       await loadData();
     } catch (err) {
@@ -390,9 +561,9 @@ export default function MiranoahDashboard({
 
     if (!response.ok) {
       const body =
-        await response.json().catch(
-          () => null
-        );
+        await response
+          .json()
+          .catch(() => null);
 
       setError(
         body?.detail ??
@@ -401,6 +572,10 @@ export default function MiranoahDashboard({
 
       return;
     }
+
+    showSuccess(
+      "Taskの状態を更新しました。"
+    );
 
     await loadData();
   }
@@ -441,6 +616,13 @@ export default function MiranoahDashboard({
         </div>
       )}
 
+      {success && (
+        <div className="success-banner">
+          <span>✓</span>
+          {success}
+        </div>
+      )}
+
       <section className="welcome-row">
         <div>
           <div className="section-kicker">
@@ -452,36 +634,56 @@ export default function MiranoahDashboard({
           </h2>
 
           <p>
-            組織のProject・Task・Teamを
-            一つの画面から確認できます。
+            Projectを作成し、その中にTaskを登録して
+            仕事の進捗を管理します。
           </p>
         </div>
 
-        <button
-          className="refresh-button"
-          onClick={loadData}
-        >
-          更新
-        </button>
+        <div className="welcome-actions">
+          <button
+            className="secondary-button"
+            onClick={loadData}
+          >
+            ↻ 更新
+          </button>
+
+          <button
+            className="primary-button"
+            onClick={() =>
+              openTaskModal()
+            }
+          >
+            ＋ Taskを作成
+          </button>
+
+          <button
+            className="primary-button"
+            onClick={
+              openProjectModal
+            }
+          >
+            ＋ Projectを作成
+          </button>
+        </div>
       </section>
 
       <section className="metrics-grid">
         <MetricCard
-          label="ACTIVE PROJECTS"
+          label="進行中Project"
           value={
             summary?.active_projects ?? 0
           }
         />
 
         <MetricCard
-          label="OPEN TASKS"
+          label="未完了Task"
           value={
             summary?.open_tasks ?? 0
           }
         />
 
         <MetricCard
-          label="OVERDUE"
+          label="期限超過"
           value={
             summary?.overdue ?? 0
           }
@@ -491,7 +693,7 @@ export default function MiranoahDashboard({
         />
 
         <MetricCard
-          label="HIGH RISK"
+          label="高リスク"
           value={
             summary?.high_risk ?? 0
           }
@@ -499,6 +701,64 @@ export default function MiranoahDashboard({
             (summary?.high_risk ?? 0) > 0
           }
         />
+      </section>
+
+      <section className="getting-started">
+        <div className="section-kicker">
+          HOW TO USE
+        </div>
+
+        <div className="steps-row">
+          <div className="step-item">
+            <span>1</span>
+
+            <div>
+              <strong>
+                Projectを作る
+              </strong>
+
+              <p>
+                案件や施策単位でProjectを作成します。
+              </p>
+            </div>
+          </div>
+
+          <div className="step-arrow">
+            →
+          </div>
+
+          <div className="step-item">
+            <span>2</span>
+
+            <div>
+              <strong>
+                Taskを登録する
+              </strong>
+
+              <p>
+                Project内の具体的な仕事をTaskとして登録します。
+              </p>
+            </div>
+          </div>
+
+          <div className="step-arrow">
+            →
+          </div>
+
+          <div className="step-item">
+            <span>3</span>
+
+            <div>
+              <strong>
+                状態を更新する
+              </strong>
+
+              <p>
+                未着手・進行中・完了などを更新します。
+              </p>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="workspace-grid">
@@ -512,80 +772,145 @@ export default function MiranoahDashboard({
               <h3>
                 Project
               </h3>
+
+              <p className="panel-description">
+                案件・施策・開発など、
+                複数Taskをまとめる単位です。
+              </p>
             </div>
 
-            <span className="count-pill">
-              {projects.length}
-            </span>
-          </div>
-
-          <form
-            className="quick-form"
-            onSubmit={createProject}
-          >
-            <input
-              value={projectName}
-              onChange={(event) =>
-                setProjectName(
-                  event.target.value
-                )
-              }
-              placeholder="Project名"
-            />
-
-            <input
-              value={projectDescription}
-              onChange={(event) =>
-                setProjectDescription(
-                  event.target.value
-                )
-              }
-              placeholder="概要（任意）"
-            />
-
             <button
-              disabled={creatingProject}
+              className="panel-create-button"
+              onClick={
+                openProjectModal
+              }
             >
-              {creatingProject
-                ? "作成中..."
-                : "Projectを作成"}
+              ＋ 作成
             </button>
-          </form>
+          </div>
 
           <div className="list">
             {projects.length === 0 && (
-              <EmptyState text="Projectはまだありません。" />
+              <div className="empty-state enhanced">
+                <strong>
+                  Projectがありません
+                </strong>
+
+                <p>
+                  まず最初のProjectを作ってみましょう。
+                </p>
+
+                <button
+                  className="primary-button"
+                  onClick={
+                    openProjectModal
+                  }
+                >
+                  ＋ Projectを作成
+                </button>
+              </div>
             )}
 
-            {projects.map((project) => (
-              <article
-                className="list-item"
-                key={project.id}
-              >
-                <div className="item-main">
-                  <strong>
-                    {project.name}
-                  </strong>
+            {projects.map(
+              (project) => {
+                const projectTaskCount =
+                  tasks.filter(
+                    (task) =>
+                      task.project_id ===
+                      project.id
+                  ).length;
 
-                  <span>
-                    {project.description ??
-                      "説明なし"}
-                  </span>
-                </div>
-
-                <div className="item-meta">
-                  <span
-                    className="status-badge"
+                return (
+                  <article
+                    className="project-card"
+                    key={project.id}
                   >
-                    {project.status}
-                  </span>
+                    <div className="project-card-top">
+                      <div>
+                        <strong className="project-title">
+                          {project.name}
+                        </strong>
 
-                  <span>
-                    {project.progress}%
-                  </span>
-                </div>
-              </article>
-            ))}
+                        <p>
+                          {project.description ??
+                            "説明なし"}
+                        </p>
+                      </div>
+
+                      <span className="status-badge">
+                        {projectStatusLabel(
+                          project.status
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="project-stats">
+                      <div>
+                        <span>
+                          Task
+                        </span>
+                        <strong>
+                          {
+                            projectTaskCount
+                          }
+                          件
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>
+                          進捗
+                        </span>
+                        <strong>
+                          {
+                            project.progress
+                          }
+                          %
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>
+                          期限
+                        </span>
+                        <strong>
+                          {dateLabel(
+                            project.due_at
+                          )}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="progress-track">
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${Math.min(
+                            Math.max(
+                              project.progress,
+                              0
+                            ),
+                            100
+                          )}%`,
+                        }}
+                      />
+                    </div>
+
+                    <div className="project-actions">
+                      <button
+                        onClick={() =>
+                          openTaskModal(
+                            project.id
+                          )
+                        }
+                      >
+                        ＋ Taskを追加
+                      </button>
+                    </div>
+                  </article>
+                );
+              }
+            )}
           </div>
         </div>
 
@@ -599,63 +924,49 @@ export default function MiranoahDashboard({
               <h3>
                 Task
               </h3>
+
+              <p className="panel-description">
+                実際に誰かが対応する具体的な仕事です。
+              </p>
             </div>
 
-            <span className="count-pill">
-              {tasks.length}
-            </span>
+            <button
+              className="panel-create-button"
+              onClick={() =>
+                openTaskModal()
+              }
+            >
+              ＋ 作成
+            </button>
           </div>
 
-          <form
-            className="quick-form task-form"
-            onSubmit={createTask}
-          >
-            <input
-              value={taskTitle}
-              onChange={(event) =>
-                setTaskTitle(
-                  event.target.value
-                )
-              }
-              placeholder="Task名"
-            />
-
-            <select
-              value={taskProjectId}
-              onChange={(event) =>
-                setTaskProjectId(
-                  event.target.value
-                )
-              }
-            >
-              <option value="">
-                Projectなし
-              </option>
-
-              {projects.map(
-                (project) => (
-                  <option
-                    value={project.id}
-                    key={project.id}
-                  >
-                    {project.name}
-                  </option>
-                )
-              )}
-            </select>
-
-            <button
-              disabled={creatingTask}
-            >
-              {creatingTask
-                ? "作成中..."
-                : "Taskを作成"}
-            </button>
-          </form>
+          <div className="task-table-header">
+            <span>Task</span>
+            <span>優先度</span>
+            <span>リスク</span>
+            <span>状態</span>
+          </div>
 
           <div className="list">
             {tasks.length === 0 && (
-              <EmptyState text="Taskはまだありません。" />
+              <div className="empty-state enhanced">
+                <strong>
+                  Taskがありません
+                </strong>
+
+                <p>
+                  Project内で行う仕事をTaskとして登録します。
+                </p>
+
+                <button
+                  className="primary-button"
+                  onClick={() =>
+                    openTaskModal()
+                  }
+                >
+                  ＋ Taskを作成
+                </button>
+              </div>
             )}
 
             {tasks.map((task) => {
@@ -668,10 +979,10 @@ export default function MiranoahDashboard({
 
               return (
                 <article
-                  className="list-item task-item"
+                  className="task-row"
                   key={task.id}
                 >
-                  <div className="item-main">
+                  <div className="task-main">
                     <strong>
                       {task.title}
                     </strong>
@@ -679,51 +990,57 @@ export default function MiranoahDashboard({
                     <span>
                       {project?.name ??
                         "Projectなし"}
-                      {" · "}
+                      {" ・ "}
                       {dateLabel(
                         task.due_at
                       )}
                     </span>
                   </div>
 
-                  <div className="task-actions">
-                    <span
-                      className={
-                        task.risk_level ===
-                          "HIGH" ||
-                        task.risk_level ===
-                          "CRITICAL"
-                          ? "risk-badge danger"
-                          : "risk-badge"
-                      }
-                    >
-                      {task.risk_level}
-                    </span>
+                  <span className="priority-badge">
+                    {priorityLabel(
+                      task.priority
+                    )}
+                  </span>
 
-                    <select
-                      className="status-select"
-                      value={task.status}
-                      onChange={(event) =>
-                        updateTaskStatus(
-                          task.id,
-                          event.target.value
-                        )
-                      }
-                    >
-                      {TASK_STATUSES.map(
-                        (status) => (
-                          <option
-                            value={status}
-                            key={status}
-                          >
-                            {statusLabel(
-                              status
-                            )}
-                          </option>
-                        )
-                      )}
-                    </select>
-                  </div>
+                  <span
+                    className={
+                      task.risk_level ===
+                        "HIGH" ||
+                      task.risk_level ===
+                        "CRITICAL"
+                        ? "risk-badge danger"
+                        : "risk-badge"
+                    }
+                  >
+                    {riskLabel(
+                      task.risk_level
+                    )}
+                  </span>
+
+                  <select
+                    className="status-select"
+                    value={task.status}
+                    onChange={(event) =>
+                      updateTaskStatus(
+                        task.id,
+                        event.target.value
+                      )
+                    }
+                  >
+                    {TASK_STATUSES.map(
+                      (status) => (
+                        <option
+                          value={status}
+                          key={status}
+                        >
+                          {taskStatusLabel(
+                            status
+                          )}
+                        </option>
+                      )
+                    )}
+                  </select>
                 </article>
               );
             })}
@@ -741,6 +1058,10 @@ export default function MiranoahDashboard({
             <h3>
               Team
             </h3>
+
+            <p className="panel-description">
+              あなたが所属・管理しているTeamです。
+            </p>
           </div>
 
           <span className="count-pill">
@@ -750,7 +1071,9 @@ export default function MiranoahDashboard({
 
         <div className="team-grid">
           {teams.length === 0 && (
-            <EmptyState text="所属Teamはありません。" />
+            <div className="empty-state">
+              所属Teamはありません。
+            </div>
           )}
 
           {teams.map((team) => (
@@ -770,6 +1093,368 @@ export default function MiranoahDashboard({
           ))}
         </div>
       </section>
+
+      {modal === "project" && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              closeModal();
+            }
+          }}
+        >
+          <div className="modal-card">
+            <div className="modal-header">
+              <div>
+                <div className="section-kicker">
+                  NEW PROJECT
+                </div>
+
+                <h2>
+                  Projectを作成
+                </h2>
+
+                <p>
+                  案件・施策・開発など、
+                  複数のTaskをまとめる単位を作成します。
+                </p>
+              </div>
+
+              <button
+                className="modal-close"
+                onClick={closeModal}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+
+            <form
+              className="modal-form"
+              onSubmit={
+                createProject
+              }
+            >
+              <label className="form-field">
+                <span>
+                  Project名
+                  <em>必須</em>
+                </span>
+
+                <input
+                  autoFocus
+                  value={projectName}
+                  onChange={(event) =>
+                    setProjectName(
+                      event.target.value
+                    )
+                  }
+                  placeholder="例：神奈川県教育委員会案件"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>
+                  概要
+                  <small>任意</small>
+                </span>
+
+                <textarea
+                  value={
+                    projectDescription
+                  }
+                  onChange={(event) =>
+                    setProjectDescription(
+                      event.target.value
+                    )
+                  }
+                  placeholder="このProjectで何を行うか簡単に入力"
+                />
+              </label>
+
+              <div className="form-grid-two">
+                <label className="form-field">
+                  <span>
+                    優先度
+                  </span>
+
+                  <select
+                    value={
+                      projectPriority
+                    }
+                    onChange={(event) =>
+                      setProjectPriority(
+                        event.target.value
+                      )
+                    }
+                  >
+                    {PRIORITIES.map(
+                      (priority) => (
+                        <option
+                          value={
+                            priority
+                          }
+                          key={
+                            priority
+                          }
+                        >
+                          {priorityLabel(
+                            priority
+                          )}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+
+                <label className="form-field">
+                  <span>
+                    期限
+                    <small>任意</small>
+                  </span>
+
+                  <input
+                    type="date"
+                    value={
+                      projectDueAt
+                    }
+                    onChange={(event) =>
+                      setProjectDueAt(
+                        event.target.value
+                      )
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={closeModal}
+                >
+                  キャンセル
+                </button>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={
+                    creatingProject
+                  }
+                >
+                  {creatingProject
+                    ? "作成中..."
+                    : "Projectを作成"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {modal === "task" && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              closeModal();
+            }
+          }}
+        >
+          <div className="modal-card">
+            <div className="modal-header">
+              <div>
+                <div className="section-kicker">
+                  NEW TASK
+                </div>
+
+                <h2>
+                  Taskを作成
+                </h2>
+
+                <p>
+                  実際に対応する具体的な仕事を登録します。
+                </p>
+              </div>
+
+              <button
+                className="modal-close"
+                onClick={closeModal}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+
+            <form
+              className="modal-form"
+              onSubmit={createTask}
+            >
+              <label className="form-field">
+                <span>
+                  所属Project
+                  <small>任意</small>
+                </span>
+
+                <select
+                  value={
+                    taskProjectId
+                  }
+                  onChange={(event) =>
+                    setTaskProjectId(
+                      event.target.value
+                    )
+                  }
+                >
+                  <option value="">
+                    Projectなし
+                  </option>
+
+                  {projects.map(
+                    (project) => (
+                      <option
+                        value={
+                          project.id
+                        }
+                        key={
+                          project.id
+                        }
+                      >
+                        {
+                          project.name
+                        }
+                      </option>
+                    )
+                  )}
+                </select>
+
+                <small className="field-help">
+                  Projectカードの「Taskを追加」から開くと自動選択されます。
+                </small>
+              </label>
+
+              <label className="form-field">
+                <span>
+                  Task名
+                  <em>必須</em>
+                </span>
+
+                <input
+                  autoFocus
+                  value={taskTitle}
+                  onChange={(event) =>
+                    setTaskTitle(
+                      event.target.value
+                    )
+                  }
+                  placeholder="例：企画書の初稿を作成"
+                />
+              </label>
+
+              <label className="form-field">
+                <span>
+                  詳細
+                  <small>任意</small>
+                </span>
+
+                <textarea
+                  value={
+                    taskDescription
+                  }
+                  onChange={(event) =>
+                    setTaskDescription(
+                      event.target.value
+                    )
+                  }
+                  placeholder="対応内容や完了条件などを入力"
+                />
+              </label>
+
+              <div className="form-grid-two">
+                <label className="form-field">
+                  <span>
+                    優先度
+                  </span>
+
+                  <select
+                    value={
+                      taskPriority
+                    }
+                    onChange={(event) =>
+                      setTaskPriority(
+                        event.target.value
+                      )
+                    }
+                  >
+                    {PRIORITIES.map(
+                      (priority) => (
+                        <option
+                          value={
+                            priority
+                          }
+                          key={
+                            priority
+                          }
+                        >
+                          {priorityLabel(
+                            priority
+                          )}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+
+                <label className="form-field">
+                  <span>
+                    期限
+                    <small>任意</small>
+                  </span>
+
+                  <input
+                    type="date"
+                    value={taskDueAt}
+                    onChange={(event) =>
+                      setTaskDueAt(
+                        event.target.value
+                      )
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={closeModal}
+                >
+                  キャンセル
+                </button>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={
+                    creatingTask
+                  }
+                >
+                  {creatingTask
+                    ? "作成中..."
+                    : "Taskを作成"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -793,18 +1478,6 @@ function MetricCard({
     >
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function EmptyState({
-  text,
-}: {
-  text: string;
-}) {
-  return (
-    <div className="empty-state">
-      {text}
     </div>
   );
 }
