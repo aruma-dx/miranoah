@@ -193,6 +193,11 @@ export default function MiranoahDashboard({
   const [teams, setTeams] =
     useState<Team[]>([]);
 
+  const [
+    reviewCandidates,
+    setReviewCandidates,
+  ] = useState<Task[]>([]);
+
   const [loading, setLoading] =
     useState(true);
 
@@ -205,8 +210,10 @@ export default function MiranoahDashboard({
   const [modal, setModal] =
     useState<ModalType>(null);
 
-  const [projectName, setProjectName] =
-    useState("");
+  const [
+    projectName,
+    setProjectName,
+  ] = useState("");
 
   const [
     projectDescription,
@@ -223,8 +230,10 @@ export default function MiranoahDashboard({
     setProjectDueAt,
   ] = useState("");
 
-  const [taskTitle, setTaskTitle] =
-    useState("");
+  const [
+    taskTitle,
+    setTaskTitle,
+  ] = useState("");
 
   const [
     taskDescription,
@@ -256,106 +265,126 @@ export default function MiranoahDashboard({
     setCreatingTask,
   ] = useState(false);
 
-  const apiFetch = useCallback(
-    async (
-      path: string,
-      options?: RequestInit
-    ) => {
-      return fetch(
-        `${apiBaseUrl}${path}`,
-        {
-          ...options,
-          credentials: "include",
-          cache: "no-store",
-          headers: {
-            "Content-Type":
-              "application/json",
-            ...(options?.headers ?? {}),
-          },
-        }
-      );
-    },
-    [apiBaseUrl]
-  );
+  const apiFetch =
+    useCallback(
+      async (
+        path: string,
+        options?: RequestInit
+      ) => {
+        return fetch(
+          `${apiBaseUrl}${path}`,
+          {
+            ...options,
+            credentials:
+              "include",
+            cache:
+              "no-store",
+            headers: {
+              "Content-Type":
+                "application/json",
+              ...(options?.headers ??
+                {}),
+            },
+          }
+        );
+      },
+      [apiBaseUrl]
+    );
 
-  const loadData = useCallback(
-    async () => {
-      setError(null);
+  const loadData =
+    useCallback(
+      async () => {
+        setError(null);
 
-      try {
-        const meResponse =
-          await apiFetch(
-            "/api/v1/auth/me"
+        try {
+          const meResponse =
+            await apiFetch(
+              "/api/v1/auth/me"
+            );
+
+          if (!meResponse.ok) {
+            setUser(null);
+            return;
+          }
+
+          const me =
+            (await meResponse.json()) as AuthUser;
+
+          setUser(me);
+
+          const [
+            summaryResponse,
+            projectsResponse,
+            tasksResponse,
+            teamsResponse,
+            reviewsResponse,
+          ] =
+            await Promise.all([
+              apiFetch(
+                "/api/v1/dashboard/summary"
+              ),
+              apiFetch(
+                "/api/v1/projects"
+              ),
+              apiFetch(
+                "/api/v1/tasks?limit=200"
+              ),
+              apiFetch(
+                "/api/v1/teams"
+              ),
+              apiFetch(
+                "/api/v1/ai-reviews"
+              ),
+            ]);
+
+          if (
+            !summaryResponse.ok ||
+            !projectsResponse.ok ||
+            !tasksResponse.ok ||
+            !teamsResponse.ok
+          ) {
+            throw new Error(
+              "MIRANOAHのデータ取得に失敗しました。"
+            );
+          }
+
+          setSummary(
+            await summaryResponse.json()
           );
 
-        if (!meResponse.ok) {
-          setUser(null);
-          return;
-        }
-
-        const me =
-          (await meResponse.json()) as AuthUser;
-
-        setUser(me);
-
-        const [
-          summaryResponse,
-          projectsResponse,
-          tasksResponse,
-          teamsResponse,
-        ] = await Promise.all([
-          apiFetch(
-            "/api/v1/dashboard/summary"
-          ),
-          apiFetch(
-            "/api/v1/projects"
-          ),
-          apiFetch(
-            "/api/v1/tasks?limit=200"
-          ),
-          apiFetch(
-            "/api/v1/teams"
-          ),
-        ]);
-
-        if (
-          !summaryResponse.ok ||
-          !projectsResponse.ok ||
-          !tasksResponse.ok ||
-          !teamsResponse.ok
-        ) {
-          throw new Error(
-            "MIRANOAHのデータ取得に失敗しました。"
+          setProjects(
+            await projectsResponse.json()
           );
+
+          setTasks(
+            await tasksResponse.json()
+          );
+
+          setTeams(
+            await teamsResponse.json()
+          );
+
+          if (
+            reviewsResponse.ok
+          ) {
+            setReviewCandidates(
+              await reviewsResponse.json()
+            );
+          } else {
+            setReviewCandidates([]);
+          }
+        } catch (err) {
+          console.error(err);
+
+          setError(
+            "データの取得中にエラーが発生しました。"
+          );
+        } finally {
+          setLoading(false);
         }
-
-        setSummary(
-          await summaryResponse.json()
-        );
-
-        setProjects(
-          await projectsResponse.json()
-        );
-
-        setTasks(
-          await tasksResponse.json()
-        );
-
-        setTeams(
-          await teamsResponse.json()
-        );
-      } catch (err) {
-        console.error(err);
-
-        setError(
-          "データの取得中にエラーが発生しました。"
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [apiFetch]
-  );
+      },
+      [apiFetch]
+    );
 
   useEffect(() => {
     loadData();
@@ -369,7 +398,10 @@ export default function MiranoahDashboard({
       .filter(
         (task) =>
           task.status !== "DONE" &&
-          task.status !== "CANCELLED"
+          task.status !==
+            "CANCELLED" &&
+          task.status !==
+            "CANDIDATE"
       )
       .slice(0, 5);
 
@@ -379,7 +411,9 @@ export default function MiranoahDashboard({
 
     setProjectName("");
     setProjectDescription("");
-    setProjectPriority("MEDIUM");
+    setProjectPriority(
+      "MEDIUM"
+    );
     setProjectDueAt("");
 
     setModal("project");
@@ -393,8 +427,12 @@ export default function MiranoahDashboard({
 
     setTaskTitle("");
     setTaskDescription("");
-    setTaskProjectId(projectId);
-    setTaskPriority("MEDIUM");
+    setTaskProjectId(
+      projectId
+    );
+    setTaskPriority(
+      "MEDIUM"
+    );
     setTaskDueAt("");
 
     setModal("task");
@@ -416,9 +454,12 @@ export default function MiranoahDashboard({
   ) {
     setSuccess(message);
 
-    window.setTimeout(() => {
-      setSuccess(null);
-    }, 4000);
+    window.setTimeout(
+      () => {
+        setSuccess(null);
+      },
+      4000
+    );
   }
 
   async function createProject(
@@ -426,43 +467,52 @@ export default function MiranoahDashboard({
   ) {
     event.preventDefault();
 
-    if (!projectName.trim()) {
+    if (
+      !projectName.trim()
+    ) {
       setError(
         "Project名を入力してください。"
       );
       return;
     }
 
-    setCreatingProject(true);
+    setCreatingProject(
+      true
+    );
     setError(null);
 
     try {
-      const response = await apiFetch(
-        "/api/v1/projects",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            name: projectName.trim(),
-            description:
-              projectDescription.trim() ||
-              null,
-            priority:
-              projectPriority,
-            due_at:
-              projectDueAt
-                ? new Date(
-                    `${projectDueAt}T23:59:59`
-                  ).toISOString()
-                : null,
-          }),
-        }
-      );
+      const response =
+        await apiFetch(
+          "/api/v1/projects",
+          {
+            method: "POST",
+            body:
+              JSON.stringify({
+                name:
+                  projectName.trim(),
+                description:
+                  projectDescription.trim() ||
+                  null,
+                priority:
+                  projectPriority,
+                due_at:
+                  projectDueAt
+                    ? new Date(
+                        `${projectDueAt}T23:59:59`
+                      ).toISOString()
+                    : null,
+              }),
+          }
+        );
 
       if (!response.ok) {
         const body =
           await response
             .json()
-            .catch(() => null);
+            .catch(
+              () => null
+            );
 
         throw new Error(
           body?.detail ??
@@ -484,7 +534,9 @@ export default function MiranoahDashboard({
           : "Projectの作成に失敗しました。"
       );
     } finally {
-      setCreatingProject(false);
+      setCreatingProject(
+        false
+      );
     }
   }
 
@@ -493,45 +545,55 @@ export default function MiranoahDashboard({
   ) {
     event.preventDefault();
 
-    if (!taskTitle.trim()) {
+    if (
+      !taskTitle.trim()
+    ) {
       setError(
         "Task名を入力してください。"
       );
       return;
     }
 
-    setCreatingTask(true);
+    setCreatingTask(
+      true
+    );
     setError(null);
 
     try {
-      const response = await apiFetch(
-        "/api/v1/tasks",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            title: taskTitle.trim(),
-            description:
-              taskDescription.trim() ||
-              null,
-            project_id:
-              taskProjectId || null,
-            priority:
-              taskPriority,
-            due_at:
-              taskDueAt
-                ? new Date(
-                    `${taskDueAt}T23:59:59`
-                  ).toISOString()
-                : null,
-          }),
-        }
-      );
+      const response =
+        await apiFetch(
+          "/api/v1/tasks",
+          {
+            method: "POST",
+            body:
+              JSON.stringify({
+                title:
+                  taskTitle.trim(),
+                description:
+                  taskDescription.trim() ||
+                  null,
+                project_id:
+                  taskProjectId ||
+                  null,
+                priority:
+                  taskPriority,
+                due_at:
+                  taskDueAt
+                    ? new Date(
+                        `${taskDueAt}T23:59:59`
+                      ).toISOString()
+                    : null,
+              }),
+          }
+        );
 
       if (!response.ok) {
         const body =
           await response
             .json()
-            .catch(() => null);
+            .catch(
+              () => null
+            );
 
         throw new Error(
           body?.detail ??
@@ -553,7 +615,9 @@ export default function MiranoahDashboard({
           : "Taskの作成に失敗しました。"
       );
     } finally {
-      setCreatingTask(false);
+      setCreatingTask(
+        false
+      );
     }
   }
 
@@ -563,21 +627,25 @@ export default function MiranoahDashboard({
   ) {
     setError(null);
 
-    const response = await apiFetch(
-      `/api/v1/tasks/${taskId}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          status,
-        }),
-      }
-    );
+    const response =
+      await apiFetch(
+        `/api/v1/tasks/${taskId}`,
+        {
+          method: "PATCH",
+          body:
+            JSON.stringify({
+              status,
+            }),
+        }
+      );
 
     if (!response.ok) {
       const body =
         await response
           .json()
-          .catch(() => null);
+          .catch(
+            () => null
+          );
 
       setError(
         body?.detail ??
@@ -632,7 +700,9 @@ export default function MiranoahDashboard({
 
       {success && (
         <div className="success-banner">
-          <span>✓</span>
+          <span>
+            ✓
+          </span>
           {success}
         </div>
       )}
@@ -654,9 +724,22 @@ export default function MiranoahDashboard({
         </div>
 
         <div className="welcome-actions">
+          <Link
+            href="/reviews"
+            className="secondary-button"
+          >
+            AIレビュー
+            {reviewCandidates.length >
+            0
+              ? ` ${reviewCandidates.length}件`
+              : ""}
+          </Link>
+
           <button
             className="secondary-button"
-            onClick={loadData}
+            onClick={
+              loadData
+            }
           >
             ↻ 更新
           </button>
@@ -685,37 +768,84 @@ export default function MiranoahDashboard({
         <MetricCard
           label="進行中Project"
           value={
-            summary?.active_projects ?? 0
+            summary?.active_projects ??
+            0
           }
         />
 
         <MetricCard
           label="未完了Task"
           value={
-            summary?.open_tasks ?? 0
+            summary?.open_tasks ??
+            0
+          }
+        />
+
+        <MetricCard
+          label="AIレビュー"
+          value={
+            reviewCandidates.length
+          }
+          danger={
+            reviewCandidates.length >
+            0
           }
         />
 
         <MetricCard
           label="期限超過"
           value={
-            summary?.overdue ?? 0
+            summary?.overdue ??
+            0
           }
           danger={
-            (summary?.overdue ?? 0) > 0
+            (summary?.overdue ??
+              0) > 0
           }
         />
 
         <MetricCard
           label="高リスク"
           value={
-            summary?.high_risk ?? 0
+            summary?.high_risk ??
+            0
           }
           danger={
-            (summary?.high_risk ?? 0) > 0
+            (summary?.high_risk ??
+              0) > 0
           }
         />
       </section>
+
+      {reviewCandidates.length >
+        0 && (
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <div className="section-kicker">
+                ACTION REQUIRED
+              </div>
+
+              <h3>
+                AIレビューが必要です
+              </h3>
+
+              <p className="panel-description">
+                AIが自動登録を保留したTask候補が
+                {reviewCandidates.length}
+                件あります。
+              </p>
+            </div>
+
+            <Link
+              href="/reviews"
+              className="primary-button"
+            >
+              AIレビューを確認
+            </Link>
+          </div>
+        </section>
+      )}
 
       <section className="workspace-grid">
         <div className="panel">
@@ -783,18 +913,24 @@ export default function MiranoahDashboard({
                   tasks.filter(
                     (task) =>
                       task.project_id ===
-                      project.id
+                        project.id &&
+                      task.status !==
+                        "CANDIDATE"
                   ).length;
 
                 return (
                   <article
                     className="project-card"
-                    key={project.id}
+                    key={
+                      project.id
+                    }
                   >
                     <div className="project-card-top">
                       <div>
                         <strong className="project-title">
-                          {project.name}
+                          {
+                            project.name
+                          }
                         </strong>
 
                         <p>
@@ -920,10 +1056,18 @@ export default function MiranoahDashboard({
           </div>
 
           <div className="task-table-header">
-            <span>Task</span>
-            <span>優先度</span>
-            <span>リスク</span>
-            <span>状態</span>
+            <span>
+              Task
+            </span>
+            <span>
+              優先度
+            </span>
+            <span>
+              リスク
+            </span>
+            <span>
+              状態
+            </span>
           </div>
 
           <div className="list">
@@ -961,11 +1105,15 @@ export default function MiranoahDashboard({
                 return (
                   <article
                     className="task-row"
-                    key={task.id}
+                    key={
+                      task.id
+                    }
                   >
                     <div className="task-main">
                       <strong>
-                        {task.title}
+                        {
+                          task.title
+                        }
                       </strong>
 
                       <span>
@@ -1001,19 +1149,29 @@ export default function MiranoahDashboard({
 
                     <select
                       className="status-select"
-                      value={task.status}
-                      onChange={(event) =>
+                      value={
+                        task.status
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         updateTaskStatus(
                           task.id,
-                          event.target.value
+                          event
+                            .target
+                            .value
                         )
                       }
                     >
                       {TASK_STATUSES.map(
                         (status) => (
                           <option
-                            value={status}
-                            key={status}
+                            value={
+                              status
+                            }
+                            key={
+                              status
+                            }
                           >
                             {taskStatusLabel(
                               status
@@ -1047,39 +1205,51 @@ export default function MiranoahDashboard({
           </div>
 
           <span className="count-pill">
-            {teams.length}
+            {
+              teams.length
+            }
           </span>
         </div>
 
         <div className="team-grid">
-          {teams.length === 0 && (
+          {teams.length ===
+            0 && (
             <div className="empty-state">
               所属Teamはありません。
             </div>
           )}
 
-          {teams.map((team) => (
-            <article
-              className="team-card"
-              key={team.id}
-            >
-              <strong>
-                {team.name}
-              </strong>
+          {teams.map(
+            (team) => (
+              <article
+                className="team-card"
+                key={
+                  team.id
+                }
+              >
+                <strong>
+                  {
+                    team.name
+                  }
+                </strong>
 
-              <p>
-                {team.description ??
-                  "説明なし"}
-              </p>
-            </article>
-          ))}
+                <p>
+                  {team.description ??
+                    "説明なし"}
+                </p>
+              </article>
+            )
+          )}
         </div>
       </section>
 
-      {modal === "project" && (
+      {modal ===
+        "project" && (
         <div
           className="modal-backdrop"
-          onMouseDown={(event) => {
+          onMouseDown={(
+            event
+          ) => {
             if (
               event.target ===
               event.currentTarget
@@ -1107,7 +1277,9 @@ export default function MiranoahDashboard({
 
               <button
                 className="modal-close"
-                onClick={closeModal}
+                onClick={
+                  closeModal
+                }
                 type="button"
               >
                 ×
@@ -1123,15 +1295,23 @@ export default function MiranoahDashboard({
               <label className="form-field">
                 <span>
                   Project名
-                  <em>必須</em>
+                  <em>
+                    必須
+                  </em>
                 </span>
 
                 <input
                   autoFocus
-                  value={projectName}
-                  onChange={(event) =>
+                  value={
+                    projectName
+                  }
+                  onChange={(
+                    event
+                  ) =>
                     setProjectName(
-                      event.target.value
+                      event
+                        .target
+                        .value
                     )
                   }
                   placeholder="例：神奈川県教育委員会案件"
@@ -1141,16 +1321,22 @@ export default function MiranoahDashboard({
               <label className="form-field">
                 <span>
                   概要
-                  <small>任意</small>
+                  <small>
+                    任意
+                  </small>
                 </span>
 
                 <textarea
                   value={
                     projectDescription
                   }
-                  onChange={(event) =>
+                  onChange={(
+                    event
+                  ) =>
                     setProjectDescription(
-                      event.target.value
+                      event
+                        .target
+                        .value
                     )
                   }
                   placeholder="このProjectで何を行うか入力"
@@ -1167,17 +1353,27 @@ export default function MiranoahDashboard({
                     value={
                       projectPriority
                     }
-                    onChange={(event) =>
+                    onChange={(
+                      event
+                    ) =>
                       setProjectPriority(
-                        event.target.value
+                        event
+                          .target
+                          .value
                       )
                     }
                   >
                     {PRIORITIES.map(
-                      (priority) => (
+                      (
+                        priority
+                      ) => (
                         <option
-                          value={priority}
-                          key={priority}
+                          value={
+                            priority
+                          }
+                          key={
+                            priority
+                          }
                         >
                           {priorityLabel(
                             priority
@@ -1191,7 +1387,9 @@ export default function MiranoahDashboard({
                 <label className="form-field">
                   <span>
                     期限
-                    <small>任意</small>
+                    <small>
+                      任意
+                    </small>
                   </span>
 
                   <input
@@ -1199,9 +1397,13 @@ export default function MiranoahDashboard({
                     value={
                       projectDueAt
                     }
-                    onChange={(event) =>
+                    onChange={(
+                      event
+                    ) =>
                       setProjectDueAt(
-                        event.target.value
+                        event
+                          .target
+                          .value
                       )
                     }
                   />
@@ -1212,7 +1414,9 @@ export default function MiranoahDashboard({
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={closeModal}
+                  onClick={
+                    closeModal
+                  }
                 >
                   キャンセル
                 </button>
@@ -1234,10 +1438,13 @@ export default function MiranoahDashboard({
         </div>
       )}
 
-      {modal === "task" && (
+      {modal ===
+        "task" && (
         <div
           className="modal-backdrop"
-          onMouseDown={(event) => {
+          onMouseDown={(
+            event
+          ) => {
             if (
               event.target ===
               event.currentTarget
@@ -1264,7 +1471,9 @@ export default function MiranoahDashboard({
 
               <button
                 className="modal-close"
-                onClick={closeModal}
+                onClick={
+                  closeModal
+                }
                 type="button"
               >
                 ×
@@ -1273,21 +1482,29 @@ export default function MiranoahDashboard({
 
             <form
               className="modal-form"
-              onSubmit={createTask}
+              onSubmit={
+                createTask
+              }
             >
               <label className="form-field">
                 <span>
                   所属Project
-                  <small>任意</small>
+                  <small>
+                    任意
+                  </small>
                 </span>
 
                 <select
                   value={
                     taskProjectId
                   }
-                  onChange={(event) =>
+                  onChange={(
+                    event
+                  ) =>
                     setTaskProjectId(
-                      event.target.value
+                      event
+                        .target
+                        .value
                     )
                   }
                 >
@@ -1296,7 +1513,9 @@ export default function MiranoahDashboard({
                   </option>
 
                   {projects.map(
-                    (project) => (
+                    (
+                      project
+                    ) => (
                       <option
                         value={
                           project.id
@@ -1317,15 +1536,23 @@ export default function MiranoahDashboard({
               <label className="form-field">
                 <span>
                   Task名
-                  <em>必須</em>
+                  <em>
+                    必須
+                  </em>
                 </span>
 
                 <input
                   autoFocus
-                  value={taskTitle}
-                  onChange={(event) =>
+                  value={
+                    taskTitle
+                  }
+                  onChange={(
+                    event
+                  ) =>
                     setTaskTitle(
-                      event.target.value
+                      event
+                        .target
+                        .value
                     )
                   }
                   placeholder="例：企画書の初稿を作成"
@@ -1335,16 +1562,22 @@ export default function MiranoahDashboard({
               <label className="form-field">
                 <span>
                   詳細
-                  <small>任意</small>
+                  <small>
+                    任意
+                  </small>
                 </span>
 
                 <textarea
                   value={
                     taskDescription
                   }
-                  onChange={(event) =>
+                  onChange={(
+                    event
+                  ) =>
                     setTaskDescription(
-                      event.target.value
+                      event
+                        .target
+                        .value
                     )
                   }
                   placeholder="対応内容や完了条件などを入力"
@@ -1361,14 +1594,20 @@ export default function MiranoahDashboard({
                     value={
                       taskPriority
                     }
-                    onChange={(event) =>
+                    onChange={(
+                      event
+                    ) =>
                       setTaskPriority(
-                        event.target.value
+                        event
+                          .target
+                          .value
                       )
                     }
                   >
                     {PRIORITIES.map(
-                      (priority) => (
+                      (
+                        priority
+                      ) => (
                         <option
                           value={
                             priority
@@ -1389,15 +1628,23 @@ export default function MiranoahDashboard({
                 <label className="form-field">
                   <span>
                     期限
-                    <small>任意</small>
+                    <small>
+                      任意
+                    </small>
                   </span>
 
                   <input
                     type="date"
-                    value={taskDueAt}
-                    onChange={(event) =>
+                    value={
+                      taskDueAt
+                    }
+                    onChange={(
+                      event
+                    ) =>
                       setTaskDueAt(
-                        event.target.value
+                        event
+                          .target
+                          .value
                       )
                     }
                   />
@@ -1408,7 +1655,9 @@ export default function MiranoahDashboard({
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={closeModal}
+                  onClick={
+                    closeModal
+                  }
                 >
                   キャンセル
                 </button>
@@ -1450,7 +1699,9 @@ function MetricCard({
           : "metric-card"
       }
     >
-      <span>{label}</span>
+      <span>
+        {label}
+      </span>
 
       <strong>
         {value}
