@@ -35,7 +35,8 @@ type Task = {
 
   ai_generated: boolean;
 
-  ai_confidence: number | null;
+  ai_confidence:
+    number | null;
 };
 
 
@@ -45,29 +46,30 @@ type Project = {
 };
 
 
+type Draft = {
+  title: string;
+
+  description: string;
+
+  projectId: string;
+
+  priority: string;
+
+  dueAt: string;
+};
+
+
 type Props = {
   apiBaseUrl: string;
 };
 
 
-function dateLabel(
-  value: string | null
-) {
-  if (!value) {
-    return "期限なし";
-  }
-
-  return new Intl.DateTimeFormat(
-    "ja-JP",
-    {
-      year: "numeric",
-      month: "numeric",
-      day: "numeric",
-    }
-  ).format(
-    new Date(value)
-  );
-}
+const PRIORITIES = [
+  "LOW",
+  "MEDIUM",
+  "HIGH",
+  "CRITICAL",
+];
 
 
 function priorityLabel(
@@ -103,14 +105,18 @@ function deadlineTypeLabel(
   > = {
     EXPLICIT:
       "本文に明記",
+
     RELATIVE:
       "相対期限",
+
     CALENDAR_BASED:
       "カレンダー基準",
+
     AI_INFERRED:
       "AI推定",
+
     MANUAL:
-      "手動設定",
+      "手動確認",
   };
 
   return (
@@ -133,6 +139,65 @@ function confidenceLabel(
 }
 
 
+function toDateInput(
+  value: string | null
+) {
+  if (!value) {
+    return "";
+  }
+
+  const date =
+    new Date(value);
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(
+      2,
+      "0"
+    );
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(
+      2,
+      "0"
+    );
+
+  return (
+    `${year}-${month}-${day}`
+  );
+}
+
+
+function createDraft(
+  task: Task
+): Draft {
+  return {
+    title:
+      task.title,
+
+    description:
+      task.description ?? "",
+
+    projectId:
+      task.project_id ?? "",
+
+    priority:
+      task.priority,
+
+    dueAt:
+      toDateInput(
+        task.due_at
+      ),
+  };
+}
+
+
 export default function AIReviewPage({
   apiBaseUrl,
 }: Props) {
@@ -145,6 +210,20 @@ export default function AIReviewPage({
     projects,
     setProjects,
   ] = useState<Project[]>([]);
+
+  const [
+    drafts,
+    setDrafts,
+  ] = useState<
+    Record<string, Draft>
+  >({});
+
+  const [
+    editingId,
+    setEditingId,
+  ] = useState<
+    string | null
+  >(null);
 
   const [
     loading,
@@ -189,6 +268,7 @@ export default function AIReviewPage({
                 {
                   credentials:
                     "include",
+
                   cache:
                     "no-store",
                 }
@@ -199,11 +279,13 @@ export default function AIReviewPage({
                 {
                   credentials:
                     "include",
+
                   cache:
                     "no-store",
                 }
               ),
             ]);
+
 
           if (
             !reviewsResponse.ok
@@ -213,6 +295,7 @@ export default function AIReviewPage({
             );
           }
 
+
           if (
             !projectsResponse.ok
           ) {
@@ -221,12 +304,48 @@ export default function AIReviewPage({
             );
           }
 
+
+          const reviewData:
+            Task[] =
+            await reviewsResponse.json();
+
+
+          const projectData:
+            Project[] =
+            await projectsResponse.json();
+
+
           setCandidates(
-            await reviewsResponse.json()
+            reviewData
           );
 
+
           setProjects(
-            await projectsResponse.json()
+            projectData
+          );
+
+
+          const nextDrafts:
+            Record<
+              string,
+              Draft
+            > = {};
+
+
+          reviewData.forEach(
+            (task) => {
+              nextDrafts[
+                task.id
+              ] =
+                createDraft(
+                  task
+                );
+            }
+          );
+
+
+          setDrafts(
+            nextDrafts
           );
 
         } catch (err) {
@@ -240,20 +359,229 @@ export default function AIReviewPage({
           setLoading(false);
         }
       },
-      [apiBaseUrl]
+      [
+        apiBaseUrl,
+      ]
     );
 
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(
+    () => {
+      loadData();
+    },
+    [
+      loadData,
+    ]
+  );
 
 
-  async function reviewAction(
+  function startEditing(
+    task: Task
+  ) {
+    setDrafts(
+      (
+        current
+      ) => ({
+        ...current,
+
+        [task.id]:
+          createDraft(
+            task
+          ),
+      })
+    );
+
+    setEditingId(
+      task.id
+    );
+
+    setError(
+      null
+    );
+
+    setSuccess(
+      null
+    );
+  }
+
+
+  function cancelEditing(
+    task: Task
+  ) {
+    setDrafts(
+      (
+        current
+      ) => ({
+        ...current,
+
+        [task.id]:
+          createDraft(
+            task
+          ),
+      })
+    );
+
+    setEditingId(
+      null
+    );
+  }
+
+
+  function updateDraft(
     taskId: string,
-    action:
-      | "approve"
-      | "reject"
+
+    key: keyof Draft,
+
+    value: string
+  ) {
+    setDrafts(
+      (
+        current
+      ) => ({
+        ...current,
+
+        [taskId]: {
+          ...current[
+            taskId
+          ],
+
+          [key]:
+            value,
+        },
+      })
+    );
+  }
+
+
+  async function approveTask(
+    task: Task,
+
+    useDraft:
+      boolean
+  ) {
+    try {
+      setProcessingId(
+        task.id
+      );
+
+      setError(null);
+      setSuccess(null);
+
+
+      const options:
+        RequestInit = {
+          method:
+            "POST",
+
+          credentials:
+            "include",
+        };
+
+
+      if (useDraft) {
+        const draft =
+          drafts[
+            task.id
+          ];
+
+
+        if (
+          !draft ||
+          !draft.title.trim()
+        ) {
+          throw new Error(
+            "Task名を入力してください。"
+          );
+        }
+
+
+        options.headers = {
+          "Content-Type":
+            "application/json",
+        };
+
+
+        options.body =
+          JSON.stringify({
+            title:
+              draft.title.trim(),
+
+            description:
+              draft.description
+                .trim()
+                || null,
+
+            project_id:
+              draft.projectId
+                || null,
+
+            priority:
+              draft.priority,
+
+            due_at:
+              draft.dueAt
+                ? new Date(
+                    `${draft.dueAt}T23:59:59`
+                  ).toISOString()
+                : null,
+          });
+      }
+
+
+      const response =
+        await fetch(
+          `${apiBaseUrl}/api/v1/ai-reviews/${task.id}/approve`,
+          options
+        );
+
+
+      if (!response.ok) {
+        const body =
+          await response
+            .json()
+            .catch(
+              () => null
+            );
+
+
+        throw new Error(
+          body?.detail
+          ?? "Taskの承認に失敗しました。"
+        );
+      }
+
+
+      setEditingId(
+        null
+      );
+
+
+      setSuccess(
+        useDraft
+          ? "内容を修正してTaskを承認しました。"
+          : "Taskを承認しました。"
+      );
+
+
+      await loadData();
+
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "エラーが発生しました。"
+      );
+
+    } finally {
+      setProcessingId(
+        null
+      );
+    }
+  }
+
+
+  async function rejectTask(
+    taskId: string
   ) {
     try {
       setProcessingId(
@@ -263,30 +591,50 @@ export default function AIReviewPage({
       setError(null);
       setSuccess(null);
 
+
       const response =
         await fetch(
-          `${apiBaseUrl}/api/v1/ai-reviews/${taskId}/${action}`,
+          `${apiBaseUrl}/api/v1/ai-reviews/${taskId}/reject`,
           {
-            method: "POST",
+            method:
+              "POST",
 
             credentials:
               "include",
           }
         );
 
+
       if (!response.ok) {
+        const body =
+          await response
+            .json()
+            .catch(
+              () => null
+            );
+
+
         throw new Error(
-          action === "approve"
-            ? "Taskの承認に失敗しました。"
-            : "Task候補の却下に失敗しました。"
+          body?.detail
+          ?? "Task候補の却下に失敗しました。"
         );
       }
 
+
+      if (
+        editingId
+        === taskId
+      ) {
+        setEditingId(
+          null
+        );
+      }
+
+
       setSuccess(
-        action === "approve"
-          ? "Taskを承認しました。"
-          : "Task候補を却下しました。"
+        "Task候補を却下しました。"
       );
+
 
       await loadData();
 
@@ -335,15 +683,17 @@ export default function AIReviewPage({
           AI REVIEW QUEUE
         </div>
 
+
         <h2>
           AIレビュー
         </h2>
 
+
         <p
           className="tagline"
         >
-          AIがTaskだと判断したものの、
-          自動登録には確信が足りない候補を確認します。
+          AIが自動登録を保留したTaskを確認し、
+          必要なら内容を修正して承認できます。
         </p>
       </section>
 
@@ -351,13 +701,16 @@ export default function AIReviewPage({
       <section
         className="panel"
       >
+
         <div
           className="panel-heading"
         >
           <div>
+
             <h3>
               確認待ち
             </h3>
+
 
             <p
               className="panel-description"
@@ -365,7 +718,9 @@ export default function AIReviewPage({
               {candidates.length}
               件の候補があります
             </p>
+
           </div>
+
 
           <Link
             href="/"
@@ -373,30 +728,35 @@ export default function AIReviewPage({
           >
             ← ダッシュボード
           </Link>
+
         </div>
 
 
         {loading ? (
+
           <div
             className="empty-state"
           >
             読み込み中...
           </div>
 
-        ) : candidates.length ===
-          0 ? (
+        ) : candidates.length
+          === 0 ? (
 
           <div
             className="empty-state enhanced"
           >
+
             <strong>
               確認待ちはありません
             </strong>
+
 
             <p>
               AIが判断に迷ったTaskが
               ここに表示されます。
             </p>
+
           </div>
 
         ) : (
@@ -404,44 +764,69 @@ export default function AIReviewPage({
           <div
             className="list"
           >
+
             {candidates.map(
               (task) => {
 
                 const project =
                   projects.find(
-                    (project) =>
-                      project.id ===
+                    (
+                      project
+                    ) =>
+                      project.id
+                      ===
                       task.project_id
                   );
+
+
+                const isEditing =
+                  editingId
+                  ===
+                  task.id;
+
+
+                const draft =
+                  drafts[
+                    task.id
+                  ];
+
 
                 return (
                   <article
                     className="project-card"
-                    key={task.id}
+                    key={
+                      task.id
+                    }
                   >
 
                     <div
                       className="project-card-top"
                     >
+
                       <div>
+
                         <strong
                           className="project-title"
                         >
                           {task.title}
                         </strong>
 
+
                         <p>
                           {task.description
                             ??
                             "説明なし"}
                         </p>
+
                       </div>
+
 
                       <span
                         className="status-badge"
                       >
                         AI候補
                       </span>
+
                     </div>
 
 
@@ -450,6 +835,7 @@ export default function AIReviewPage({
                     >
 
                       <div>
+
                         <span>
                           AI確信度
                         </span>
@@ -459,23 +845,12 @@ export default function AIReviewPage({
                             task.ai_confidence
                           )}
                         </strong>
+
                       </div>
 
 
                       <div>
-                        <span>
-                          期限
-                        </span>
 
-                        <strong>
-                          {dateLabel(
-                            task.due_at
-                          )}
-                        </strong>
-                      </div>
-
-
-                      <div>
                         <span>
                           期限判定
                         </span>
@@ -485,6 +860,22 @@ export default function AIReviewPage({
                             task.deadline_type
                           )}
                         </strong>
+
+                      </div>
+
+
+                      <div>
+
+                        <span>
+                          期限確信度
+                        </span>
+
+                        <strong>
+                          {confidenceLabel(
+                            task.deadline_confidence
+                          )}
+                        </strong>
+
                       </div>
 
                     </div>
@@ -495,6 +886,7 @@ export default function AIReviewPage({
                     >
 
                       <div>
+
                         <span>
                           Project
                         </span>
@@ -504,10 +896,12 @@ export default function AIReviewPage({
                             ??
                             "Projectなし"}
                         </strong>
+
                       </div>
 
 
                       <div>
+
                         <span>
                           優先度
                         </span>
@@ -517,28 +911,259 @@ export default function AIReviewPage({
                             task.priority
                           )}
                         </strong>
+
                       </div>
 
 
                       <div>
+
                         <span>
-                          期限確信度
+                          AI生成
                         </span>
 
                         <strong>
-                          {confidenceLabel(
-                            task.deadline_confidence
-                          )}
+                          はい
                         </strong>
+
                       </div>
 
                     </div>
 
 
+                    {isEditing &&
+                      draft && (
+
+                      <div
+                        className="modal-form"
+                        style={{
+                          marginTop:
+                            "20px",
+                        }}
+                      >
+
+                        <label
+                          className="form-field"
+                        >
+                          <span>
+                            Task名
+                            <em>
+                              必須
+                            </em>
+                          </span>
+
+
+                          <input
+                            value={
+                              draft.title
+                            }
+                            onChange={(
+                              event
+                            ) =>
+                              updateDraft(
+                                task.id,
+                                "title",
+                                event
+                                  .target
+                                  .value
+                              )
+                            }
+                          />
+                        </label>
+
+
+                        <label
+                          className="form-field"
+                        >
+                          <span>
+                            詳細
+                            <small>
+                              任意
+                            </small>
+                          </span>
+
+
+                          <textarea
+                            value={
+                              draft.description
+                            }
+                            onChange={(
+                              event
+                            ) =>
+                              updateDraft(
+                                task.id,
+                                "description",
+                                event
+                                  .target
+                                  .value
+                              )
+                            }
+                          />
+                        </label>
+
+
+                        <div
+                          className="form-grid-two"
+                        >
+
+                          <label
+                            className="form-field"
+                          >
+                            <span>
+                              Project
+                            </span>
+
+
+                            <select
+                              value={
+                                draft.projectId
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                updateDraft(
+                                  task.id,
+                                  "projectId",
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                            >
+
+                              <option
+                                value=""
+                              >
+                                Projectなし
+                              </option>
+
+
+                              {projects.map(
+                                (
+                                  project
+                                ) => (
+
+                                  <option
+                                    key={
+                                      project.id
+                                    }
+                                    value={
+                                      project.id
+                                    }
+                                  >
+                                    {
+                                      project.name
+                                    }
+                                  </option>
+
+                                )
+                              )}
+
+                            </select>
+
+                          </label>
+
+
+                          <label
+                            className="form-field"
+                          >
+                            <span>
+                              優先度
+                            </span>
+
+
+                            <select
+                              value={
+                                draft.priority
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                updateDraft(
+                                  task.id,
+                                  "priority",
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                            >
+
+                              {PRIORITIES.map(
+                                (
+                                  priority
+                                ) => (
+
+                                  <option
+                                    key={
+                                      priority
+                                    }
+                                    value={
+                                      priority
+                                    }
+                                  >
+                                    {priorityLabel(
+                                      priority
+                                    )}
+                                  </option>
+
+                                )
+                              )}
+
+                            </select>
+
+                          </label>
+
+                        </div>
+
+
+                        <label
+                          className="form-field"
+                        >
+                          <span>
+                            期限
+                            <small>
+                              任意
+                            </small>
+                          </span>
+
+
+                          <input
+                            type="date"
+                            value={
+                              draft.dueAt
+                            }
+                            onChange={(
+                              event
+                            ) =>
+                              updateDraft(
+                                task.id,
+                                "dueAt",
+                                event
+                                  .target
+                                  .value
+                              )
+                            }
+                          />
+                        </label>
+
+                      </div>
+                    )}
+
+
                     <div
                       className="project-actions"
                       style={{
-                        gap: "8px",
+                        gap:
+                          "8px",
+
+                        marginTop:
+                          "20px",
+
+                        display:
+                          "flex",
+
+                        flexWrap:
+                          "wrap",
                       }}
                     >
 
@@ -546,12 +1171,12 @@ export default function AIReviewPage({
                         className="secondary-button"
                         disabled={
                           processingId
-                          === task.id
+                          ===
+                          task.id
                         }
                         onClick={() =>
-                          reviewAction(
-                            task.id,
-                            "reject"
+                          rejectTask(
+                            task.id
                           )
                         }
                       >
@@ -559,24 +1184,95 @@ export default function AIReviewPage({
                       </button>
 
 
-                      <button
-                        className="primary-button"
-                        disabled={
-                          processingId
-                          === task.id
-                        }
-                        onClick={() =>
-                          reviewAction(
-                            task.id,
-                            "approve"
-                          )
-                        }
-                      >
-                        {processingId
-                          === task.id
-                          ? "処理中..."
-                          : "承認してTask化"}
-                      </button>
+                      {isEditing ? (
+
+                        <>
+
+                          <button
+                            className="secondary-button"
+                            disabled={
+                              processingId
+                              ===
+                              task.id
+                            }
+                            onClick={() =>
+                              cancelEditing(
+                                task
+                              )
+                            }
+                          >
+                            編集をやめる
+                          </button>
+
+
+                          <button
+                            className="primary-button"
+                            disabled={
+                              processingId
+                              ===
+                              task.id
+                            }
+                            onClick={() =>
+                              approveTask(
+                                task,
+                                true
+                              )
+                            }
+                          >
+                            {processingId
+                              ===
+                              task.id
+                              ? "処理中..."
+                              : "修正して承認"}
+                          </button>
+
+                        </>
+
+                      ) : (
+
+                        <>
+
+                          <button
+                            className="secondary-button"
+                            disabled={
+                              processingId
+                              ===
+                              task.id
+                            }
+                            onClick={() =>
+                              startEditing(
+                                task
+                              )
+                            }
+                          >
+                            内容を修正
+                          </button>
+
+
+                          <button
+                            className="primary-button"
+                            disabled={
+                              processingId
+                              ===
+                              task.id
+                            }
+                            onClick={() =>
+                              approveTask(
+                                task,
+                                false
+                              )
+                            }
+                          >
+                            {processingId
+                              ===
+                              task.id
+                              ? "処理中..."
+                              : "そのまま承認"}
+                          </button>
+
+                        </>
+
+                      )}
 
                     </div>
 
@@ -584,6 +1280,7 @@ export default function AIReviewPage({
                 );
               }
             )}
+
           </div>
         )}
 
