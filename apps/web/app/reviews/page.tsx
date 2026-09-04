@@ -1,6 +1,4 @@
-import AIReviewPage from (
-  "../components/AIReviewPage"
-);
+import AIReviewPage from "../components/AIReviewPage";
 
 
 export const dynamic =
