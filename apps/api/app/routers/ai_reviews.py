@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import (
@@ -5,6 +6,7 @@ from fastapi import (
     Depends,
     HTTPException,
 )
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,14 +15,22 @@ from app.core.dependencies import (
     get_current_user,
 )
 from app.db.session import get_db
-from app.models.core import Task
-from app.models.enums import TaskStatus
+from app.models.core import (
+    Project,
+    Task,
+)
+from app.models.enums import (
+    DeadlineType,
+    Priority,
+    TaskStatus,
+)
 from app.schemas.task import TaskRead
 from app.services.authorization import (
     has_global_permission,
     has_project_permission,
 )
 from app.services.scopes import (
+    apply_project_view_scope,
     apply_task_view_scope,
 )
 
@@ -29,6 +39,21 @@ router = APIRouter(
     prefix="/api/v1/ai-reviews",
     tags=["ai-reviews"],
 )
+
+
+class AIReviewApproveRequest(
+    BaseModel
+):
+    title: str
+    description: str | None = None
+
+    project_id: UUID | None = None
+
+    priority: Priority = (
+        Priority.MEDIUM
+    )
+
+    due_at: datetime | None = None
 
 
 def _can_view_review(
@@ -73,6 +98,27 @@ def _can_approve_review(
     )
 
 
+def _can_approve_target_project(
+    *,
+    db: Session,
+    current_user: CurrentUser,
+    project_id: UUID | None,
+) -> bool:
+    if project_id is None:
+        return has_global_permission(
+            db=db,
+            current_user=current_user,
+            permission="ai_review.approve",
+        )
+
+    return has_project_permission(
+        db=db,
+        current_user=current_user,
+        project_id=project_id,
+        permission="ai_review.approve",
+    )
+
+
 def _get_candidate(
     *,
     db: Session,
@@ -81,7 +127,8 @@ def _get_candidate(
 ) -> Task:
     stmt = select(Task).where(
         Task.id == task_id,
-        Task.status == TaskStatus.CANDIDATE,
+        Task.status
+        == TaskStatus.CANDIDATE,
         Task.ai_generated.is_(True),
     )
 
@@ -95,10 +142,44 @@ def _get_candidate(
     if task is None:
         raise HTTPException(
             status_code=404,
-            detail="AI review candidate not found.",
+            detail=(
+                "AI review candidate "
+                "not found."
+            ),
         )
 
     return task
+
+
+def _validate_project(
+    *,
+    db: Session,
+    current_user: CurrentUser,
+    project_id: UUID | None,
+) -> Project | None:
+    if project_id is None:
+        return None
+
+    stmt = select(
+        Project
+    ).where(
+        Project.id == project_id
+    )
+
+    stmt = apply_project_view_scope(
+        stmt=stmt,
+        current_user=current_user,
+    )
+
+    project = db.scalar(stmt)
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found.",
+        )
+
+    return project
 
 
 @router.get(
@@ -106,7 +187,9 @@ def _get_candidate(
     response_model=list[TaskRead],
 )
 def list_ai_reviews(
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
@@ -116,7 +199,9 @@ def list_ai_reviews(
         .where(
             Task.status
             == TaskStatus.CANDIDATE,
-            Task.ai_generated.is_(True),
+            Task.ai_generated.is_(
+                True
+            ),
         )
         .order_by(
             Task.created_at.desc()
@@ -149,7 +234,13 @@ def list_ai_reviews(
 )
 def approve_ai_review(
     task_id: UUID,
-    db: Session = Depends(get_db),
+    data: (
+        AIReviewApproveRequest
+        | None
+    ) = None,
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
@@ -167,8 +258,96 @@ def approve_ai_review(
     ):
         raise HTTPException(
             status_code=403,
-            detail="Insufficient permission.",
+            detail=(
+                "Insufficient permission."
+            ),
         )
+
+    if data is not None:
+        title = (
+            data.title
+            .strip()
+        )
+
+        if not title:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Task title is required."
+                ),
+            )
+
+        _validate_project(
+            db=db,
+            current_user=current_user,
+            project_id=(
+                data.project_id
+            ),
+        )
+
+        if not (
+            _can_approve_target_project(
+                db=db,
+                current_user=current_user,
+                project_id=(
+                    data.project_id
+                ),
+            )
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Insufficient permission "
+                    "for target Project."
+                ),
+            )
+
+        task.title = title
+
+        task.description = (
+            data.description.strip()
+            if data.description
+            else None
+        )
+
+        task.project_id = (
+            data.project_id
+        )
+
+        task.priority = (
+            data.priority
+        )
+
+        task.due_at = (
+            data.due_at
+        )
+
+        if data.due_at is None:
+            task.deadline_type = None
+            task.deadline_confidence = None
+
+        else:
+            task.deadline_type = (
+                DeadlineType.MANUAL
+            )
+
+            task.deadline_confidence = (
+                1.0
+            )
+
+    else:
+        if (
+            task.deadline_type
+            == DeadlineType.AI_INFERRED
+        ):
+            if task.due_at is not None:
+                task.deadline_type = (
+                    DeadlineType.MANUAL
+                )
+
+                task.deadline_confidence = (
+                    1.0
+                )
 
     task.status = (
         TaskStatus.NOT_STARTED
@@ -186,7 +365,9 @@ def approve_ai_review(
 )
 def reject_ai_review(
     task_id: UUID,
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
@@ -204,7 +385,9 @@ def reject_ai_review(
     ):
         raise HTTPException(
             status_code=403,
-            detail="Insufficient permission.",
+            detail=(
+                "Insufficient permission."
+            ),
         )
 
     task.status = (
