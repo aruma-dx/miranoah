@@ -1,6 +1,8 @@
 import AuthPanel from "./components/AuthPanel";
+import MiranoahDashboard from "./components/MiranoahDashboard";
 
-export const dynamic = "force-dynamic";
+export const dynamic =
+  "force-dynamic";
 
 type HealthResponse = {
   ok: boolean;
@@ -26,13 +28,10 @@ async function getHealth(
       return null;
     }
 
-    return (await response.json()) as HealthResponse;
-  } catch (error) {
-    console.error(
-      "MIRANOAH API health check failed:",
-      error
-    );
-
+    return (
+      await response.json()
+    ) as HealthResponse;
+  } catch {
     return null;
   }
 }
@@ -41,77 +40,63 @@ export default async function Home() {
   const apiBaseUrl =
     process.env.API_BASE_URL ?? "";
 
-  const health = await getHealth(
-    apiBaseUrl
-  );
-
-  const connected =
-    health?.ok === true;
-
-  const cards = [
-    [
-      "API STATUS",
-      connected ? "ONLINE" : "OFFLINE",
-      connected
-        ? `Connected to ${health?.service}`
-        : "Backend connection failed",
-    ],
-    [
-      "ACTIVE PROJECTS",
-      "—",
-      "Data connection pending",
-    ],
-    [
-      "OPEN TASKS",
-      "—",
-      "Data connection pending",
-    ],
-    [
-      "HIGH RISK",
-      "—",
-      "Data connection pending",
-    ],
-  ];
+  const health =
+    await getHealth(apiBaseUrl);
 
   return (
     <main>
       <header className="topbar">
-        <div className="brand">
-          AI PMO / COMMAND CENTER
+        <div>
+          <div className="brand">
+            MIRANOAH
+          </div>
+
+          <div className="brand-sub">
+            AI PMO / COMMAND CENTER
+          </div>
         </div>
 
-        <AuthPanel
-          apiBaseUrl={apiBaseUrl}
-        />
+        <div className="topbar-right">
+          <div
+            className={
+              health?.ok
+                ? "api-indicator online"
+                : "api-indicator offline"
+            }
+          >
+            <span />
+
+            API{" "}
+            {health?.ok
+              ? "ONLINE"
+              : "OFFLINE"}
+          </div>
+
+          <AuthPanel
+            apiBaseUrl={apiBaseUrl}
+          />
+        </div>
       </header>
 
-      <section className="hero">
-        <h1>MIRANOAH</h1>
+      <section className="hero compact">
+        <div className="hero-eyebrow">
+          ORGANIZATIONAL INTELLIGENCE
+        </div>
+
+        <h1>
+          MIRANOAH
+        </h1>
 
         <p className="tagline">
-          すべてを見渡し、一つも取りこぼさない。
-          Slackから仕事を理解し、組織全体のタスク・期限・Todo・リスクを統合する。
+          Slackから仕事を理解し、
+          Project・Task・期限・リスクを
+          一つの場所で管理するAI PMO。
         </p>
       </section>
 
-      <div className="grid">
-        {cards.map(
-          ([label, value, status]) => (
-            <div
-              className="card"
-              key={label}
-            >
-              <span>{label}</span>
-
-              <strong>{value}</strong>
-
-              <div className="status">
-                {status}
-              </div>
-            </div>
-          )
-        )}
-      </div>
+      <MiranoahDashboard
+        apiBaseUrl={apiBaseUrl}
+      />
     </main>
   );
 }
