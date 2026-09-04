@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import CurrentUser
 from app.models.core import (
-    Project,
     ProjectMember,
     Task,
     TaskAssignee,
@@ -23,6 +22,54 @@ from app.services.permissions import (
     PermissionScope,
     has_permission,
 )
+
+
+def get_team_role(
+    *,
+    db: Session,
+    team_id: UUID,
+    user_id: UUID,
+) -> TeamRole | None:
+    membership = db.scalar(
+        select(TeamMember).where(
+            TeamMember.team_id == team_id,
+            TeamMember.user_id == user_id,
+        )
+    )
+
+    if membership is None:
+        return None
+
+    return membership.role
+
+
+def has_team_permission(
+    *,
+    db: Session,
+    current_user: CurrentUser,
+    team_id: UUID,
+    permission: str,
+) -> bool:
+    return has_permission(
+        db=db,
+        workspace_id=current_user.workspace_id,
+        user_id=current_user.id,
+        permission=permission,
+        ctx=PermissionContext(
+            workspace_role=current_user.workspace_role,
+            team_role=get_team_role(
+                db=db,
+                team_id=team_id,
+                user_id=current_user.id,
+            ),
+        ),
+        scopes=[
+            PermissionScope(
+                scope_type="TEAM",
+                scope_id=team_id,
+            )
+        ],
+    )
 
 
 def get_project_role(
@@ -87,9 +134,7 @@ def build_project_permission_context(
     project_id: UUID,
 ) -> PermissionContext:
     return PermissionContext(
-        workspace_role=(
-            current_user.workspace_role
-        ),
+        workspace_role=current_user.workspace_role,
         team_role=get_project_team_role(
             db=db,
             project_id=project_id,
@@ -111,15 +156,11 @@ def has_global_permission(
 ) -> bool:
     return has_permission(
         db=db,
-        workspace_id=(
-            current_user.workspace_id
-        ),
+        workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         permission=permission,
         ctx=PermissionContext(
-            workspace_role=(
-                current_user.workspace_role
-            )
+            workspace_role=current_user.workspace_role
         ),
     )
 
@@ -131,19 +172,15 @@ def has_project_permission(
     project_id: UUID,
     permission: str,
 ) -> bool:
-    ctx = (
-        build_project_permission_context(
-            db=db,
-            current_user=current_user,
-            project_id=project_id,
-        )
+    ctx = build_project_permission_context(
+        db=db,
+        current_user=current_user,
+        project_id=project_id,
     )
 
     return has_permission(
         db=db,
-        workspace_id=(
-            current_user.workspace_id
-        ),
+        workspace_id=current_user.workspace_id,
         user_id=current_user.id,
         permission=permission,
         ctx=ctx,
@@ -162,10 +199,7 @@ def is_task_self_related(
     task: Task,
     current_user: CurrentUser,
 ) -> bool:
-    if (
-        task.owner_id
-        == current_user.id
-    ):
+    if task.owner_id == current_user.id:
         return True
 
     assigned = db.scalar(
@@ -195,21 +229,17 @@ def has_task_edit_permission(
         return False
 
     if task.project_id is not None:
-        full_edit = (
-            has_project_permission(
-                db=db,
-                current_user=current_user,
-                project_id=task.project_id,
-                permission="task.edit",
-            )
+        full_edit = has_project_permission(
+            db=db,
+            current_user=current_user,
+            project_id=task.project_id,
+            permission="task.edit",
         )
     else:
-        full_edit = (
-            has_global_permission(
-                db=db,
-                current_user=current_user,
-                permission="task.edit",
-            )
+        full_edit = has_global_permission(
+            db=db,
+            current_user=current_user,
+            permission="task.edit",
         )
 
     if full_edit:
