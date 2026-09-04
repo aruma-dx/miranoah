@@ -78,7 +78,10 @@ AI_ENABLED_POLICIES = {
 }
 
 
+# 0.90以上なら原則自動登録
 AUTO_CREATE_THRESHOLD = 0.90
+
+# 0.60未満はReviewにも送らず無視
 REVIEW_MIN_THRESHOLD = 0.60
 
 
@@ -409,6 +412,8 @@ def _update_message(
 
     existing.edited_at = _now()
 
+    # 編集されたメッセージは
+    # AIに再解析させる
     existing.processed = False
 
     existing.updated_at = _now()
@@ -597,6 +602,8 @@ def analyze_slack_message(
             )
         )
 
+        # 同じSlackメッセージから
+        # Taskを重複作成しない
         existing_task = db.scalar(
             select(Task).where(
                 Task.workspace_id
@@ -622,45 +629,50 @@ def analyze_slack_message(
             "[MIRANOAH AI] "
             f"message={message.id} "
             f"is_task={result.is_task} "
-            f"confidence={result.confidence}"
+            f"confidence={result.confidence} "
+            f"deadline_type={result.deadline_type}"
         )
 
+        # Taskではない
         if not result.is_task:
             message.processed = True
             db.commit()
-            return
 
-        if (
-            result.confidence
-            < AUTO_CREATE_THRESHOLD
-        ):
             print(
                 "[MIRANOAH AI] "
-                "Skipped because confidence "
-                "is below auto-create threshold."
+                "Not a task. Ignored."
             )
 
-            message.processed = True
-            db.commit()
             return
 
-        if (
-            result.deadline_type
-            == "AI_INFERRED"
-        ):
-            print(
-                "[MIRANOAH AI] "
-                "Skipped because deadline "
-                "requires review."
-            )
-
-            message.processed = True
-            db.commit()
-            return
-
+        # Taskだがタイトル生成に失敗
         if not result.title:
             message.processed = True
             db.commit()
+
+            print(
+                "[MIRANOAH AI] "
+                "Task title is missing. Ignored."
+            )
+
+            return
+
+        # confidence 0.60未満は
+        # Reviewにも送らない
+        if (
+            result.confidence
+            < REVIEW_MIN_THRESHOLD
+        ):
+            message.processed = True
+            db.commit()
+
+            print(
+                "[MIRANOAH AI] "
+                "Ignored because confidence "
+                f"is below review threshold "
+                f"({result.confidence})."
+            )
+
             return
 
         requester = _resolve_user(
@@ -715,6 +727,26 @@ def analyze_slack_message(
             except ValueError:
                 deadline_type = None
 
+        # Reviewが必要な条件
+        #
+        # 1. Task confidenceが0.90未満
+        # 2. 期限をAIが推測している
+        requires_review = (
+            result.confidence
+            < AUTO_CREATE_THRESHOLD
+            or deadline_type
+            == DeadlineType.AI_INFERRED
+        )
+
+        if requires_review:
+            task_status = (
+                TaskStatus.CANDIDATE
+            )
+        else:
+            task_status = (
+                TaskStatus.NOT_STARTED
+            )
+
         task = Task(
             workspace_id=(
                 message.workspace_id
@@ -728,9 +760,7 @@ def analyze_slack_message(
             description=(
                 result.description
             ),
-            status=(
-                TaskStatus.NOT_STARTED
-            ),
+            status=task_status,
             priority=priority,
             requester_id=(
                 requester.id
@@ -773,7 +803,40 @@ def analyze_slack_message(
         message.processed = True
 
         db.commit()
+        db.refresh(task)
 
+        # Review Queueへ送った場合
+        if requires_review:
+            review_reasons = []
+
+            if (
+                result.confidence
+                < AUTO_CREATE_THRESHOLD
+            ):
+                review_reasons.append(
+                    "LOW_CONFIDENCE"
+                )
+
+            if (
+                deadline_type
+                == DeadlineType.AI_INFERRED
+            ):
+                review_reasons.append(
+                    "AI_INFERRED_DEADLINE"
+                )
+
+            print(
+                "[MIRANOAH AI] "
+                f"Candidate created: "
+                f"{task.id} "
+                f"{task.title} "
+                f"reasons="
+                f"{','.join(review_reasons)}"
+            )
+
+            return
+
+        # 高確度なので通常Taskとして自動登録
         print(
             "[MIRANOAH AI] "
             f"Task created: "
@@ -807,6 +870,7 @@ def process_slack_event(
     ):
         return
 
+    # DMは対象外
     if _is_dm(
         event
     ):
@@ -841,6 +905,8 @@ def process_slack_event(
         if workspace is None:
             return
 
+        # IGNORE設定のチャンネルは
+        # 保存も解析もしない
         if _channel_is_ignored(
             db=db,
             workspace_id=(
@@ -854,6 +920,7 @@ def process_slack_event(
             "subtype"
         )
 
+        # Slackメッセージ編集
         if (
             subtype
             == "message_changed"
@@ -879,6 +946,7 @@ def process_slack_event(
 
             return
 
+        # Slackメッセージ削除
         if (
             subtype
             == "message_deleted"
@@ -903,6 +971,7 @@ def process_slack_event(
         ):
             return
 
+        # 通常メッセージ
         message_id = (
             _create_message(
                 db=db,
@@ -917,6 +986,8 @@ def process_slack_event(
             )
         )
 
+        # DB保存後、
+        # AI Task Detectorへ送る
         if message_id:
             analyze_slack_message.send(
                 str(message_id)
