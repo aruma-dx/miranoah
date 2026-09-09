@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,66 @@ CHANNEL_CONTEXT_LIMIT = 5
 # スレッドでは親投稿を含め
 # 最大何件を見るか
 THREAD_CONTEXT_LIMIT = 20
+
+
+SLACK_MENTION_RE = re.compile(
+    r"<@([A-Z0-9]+)>"
+)
+
+
+ASSIGNMENT_MARKERS = (
+    "お願い",
+    "お願いします",
+    "対応して",
+    "対応お願い",
+    "確認して",
+    "確認お願い",
+    "修正して",
+    "修正お願い",
+    "作成して",
+    "作って",
+    "共有して",
+    "準備して",
+    "送って",
+    "送付して",
+    "提出して",
+    "更新して",
+    "調整して",
+    "連絡して",
+    "進めて",
+    "やって",
+    "してください",
+    "できますか",
+    "お願いできますか",
+    "頼む",
+    "任せ",
+)
+
+
+SELF_COMMITMENT_MARKERS = (
+    "やります",
+    "やっておきます",
+    "対応します",
+    "対応しておきます",
+    "確認します",
+    "確認しておきます",
+    "修正します",
+    "修正しておきます",
+    "作成します",
+    "作ります",
+    "準備します",
+    "共有します",
+    "送ります",
+    "送付します",
+    "提出します",
+    "更新します",
+    "調整します",
+    "連絡します",
+    "進めます",
+    "進めておきます",
+    "担当します",
+    "対応しておきます",
+)
 
 
 class TaskDetectionResult(
@@ -298,6 +359,10 @@ workspace_usersから対応する人物を確認する。
 
 Slack User IDは必ず
 workspace_usersに存在するIDだけを使用する。
+
+複数人が同じTaskの担当者として
+明示されている場合は、
+単一担当者を勝手に選ばずnullとする。
 
 
 6.
@@ -811,6 +876,353 @@ def _get_conversation_context(
     }
 
 
+def _active_users_by_slack_id(
+    *,
+    db: Session,
+    workspace_id,
+) -> dict[str, User]:
+    users = list(
+        db.scalars(
+            select(User).where(
+                User.workspace_id
+                == workspace_id,
+
+                User.is_active.is_(
+                    True
+                ),
+
+                User.slack_user_id.is_not(
+                    None
+                ),
+            )
+        )
+    )
+
+    return {
+        user.slack_user_id:
+            user
+        for user in users
+        if user.slack_user_id
+    }
+
+
+def _unique_valid_mentions(
+    *,
+    text: str,
+    users_by_slack_id: dict[str, User],
+) -> list[str]:
+    mentions: list[str] = []
+
+    for slack_user_id in (
+        SLACK_MENTION_RE.findall(
+            text
+        )
+    ):
+        if (
+            slack_user_id
+            not in users_by_slack_id
+        ):
+            continue
+
+        if (
+            slack_user_id
+            not in mentions
+        ):
+            mentions.append(
+                slack_user_id
+            )
+
+    return mentions
+
+
+def _looks_like_assignment_request(
+    text: str,
+) -> bool:
+    return any(
+        marker in text
+        for marker
+        in ASSIGNMENT_MARKERS
+    )
+
+
+def _looks_like_self_commitment(
+    text: str,
+) -> bool:
+    return any(
+        marker in text
+        for marker
+        in SELF_COMMITMENT_MARKERS
+    )
+
+
+def _normalize_name(
+    value: str,
+) -> str:
+    return (
+        value
+        .replace(
+            " ",
+            ""
+        )
+        .replace(
+            "　",
+            ""
+        )
+        .strip()
+    )
+
+
+def _name_aliases(
+    display_name: str,
+) -> set[str]:
+    aliases: set[str] = set()
+
+    normalized = _normalize_name(
+        display_name
+    )
+
+    if len(normalized) >= 2:
+        aliases.add(
+            normalized
+        )
+
+    parts = [
+        part.strip()
+        for part
+        in re.split(
+            r"[\s　]+",
+            display_name
+        )
+        if part.strip()
+    ]
+
+    for part in parts:
+        if len(part) >= 2:
+            aliases.add(
+                part
+            )
+
+    return aliases
+
+
+def _find_named_assignees(
+    *,
+    text: str,
+    users_by_slack_id: dict[str, User],
+) -> list[str]:
+    matched_ids: list[str] = []
+
+    normalized_text = (
+        _normalize_name(
+            text
+        )
+    )
+
+    alias_to_ids: dict[
+        str,
+        list[str],
+    ] = {}
+
+    for (
+        slack_user_id,
+        user,
+    ) in users_by_slack_id.items():
+        for alias in _name_aliases(
+            user.display_name
+        ):
+            alias_to_ids.setdefault(
+                alias,
+                [],
+            ).append(
+                slack_user_id
+            )
+
+    for (
+        alias,
+        slack_user_ids,
+    ) in alias_to_ids.items():
+        # 同じ呼び名の人が複数いる場合は
+        # 名前だけでは特定しない
+        if len(
+            slack_user_ids
+        ) != 1:
+            continue
+
+        honorific_patterns = (
+            f"{alias}さん",
+            f"{alias}様",
+            f"{alias}くん",
+            f"{alias}君",
+            f"{alias}ちゃん",
+        )
+
+        if not any(
+            pattern
+            in normalized_text
+            for pattern
+            in honorific_patterns
+        ):
+            continue
+
+        slack_user_id = (
+            slack_user_ids[0]
+        )
+
+        if (
+            slack_user_id
+            not in matched_ids
+        ):
+            matched_ids.append(
+                slack_user_id
+            )
+
+    return matched_ids
+
+
+def _resolve_assignee(
+    *,
+    db: Session,
+    message: SlackMessage,
+    result: TaskDetectionResult,
+) -> tuple[
+    str | None,
+    str,
+]:
+    if not result.is_task:
+        return (
+            None,
+            "NOT_TASK",
+        )
+
+    users_by_slack_id = (
+        _active_users_by_slack_id(
+            db=db,
+            workspace_id=(
+                message.workspace_id
+            ),
+        )
+    )
+
+    text = (
+        message.text
+        or ""
+    ).strip()
+
+    mentions = (
+        _unique_valid_mentions(
+            text=text,
+            users_by_slack_id=(
+                users_by_slack_id
+            ),
+        )
+    )
+
+    # 複数人が明示されている場合、
+    # 現在は単一Ownerしか持てないため
+    # 勝手に1人を選ばない
+    if (
+        len(mentions) > 1
+        and
+        _looks_like_assignment_request(
+            text
+        )
+    ):
+        return (
+            None,
+            "MULTIPLE_MENTIONS",
+        )
+
+    # 1人だけ明示メンションされ、
+    # その文章が依頼表現なら最優先
+    if (
+        len(mentions) == 1
+        and
+        _looks_like_assignment_request(
+            text
+        )
+    ):
+        return (
+            mentions[0],
+            "DIRECT_MENTION",
+        )
+
+    named_assignees = (
+        _find_named_assignees(
+            text=text,
+            users_by_slack_id=(
+                users_by_slack_id
+            ),
+        )
+    )
+
+    # 名前指定が複数人なら
+    # 単一担当者を選ばない
+    if (
+        len(named_assignees) > 1
+        and
+        _looks_like_assignment_request(
+            text
+        )
+    ):
+        return (
+            None,
+            "MULTIPLE_NAMES",
+        )
+
+    if (
+        len(named_assignees) == 1
+        and
+        _looks_like_assignment_request(
+            text
+        )
+    ):
+        return (
+            named_assignees[0],
+            "DIRECT_NAME",
+        )
+
+    # 「僕がやります」
+    # 「確認します」
+    # 「対応しておきます」
+    # などの明確な自己コミット
+    if (
+        message.slack_user_id
+        and
+        message.slack_user_id
+        in users_by_slack_id
+        and
+        _looks_like_self_commitment(
+            text
+        )
+    ):
+        return (
+            message.slack_user_id,
+            "SELF_COMMITMENT",
+        )
+
+    # AIが文脈から担当者を出している場合も
+    # 実在するSlack User IDか必ず検証する
+    ai_assignee = (
+        result.assignee_slack_user_id
+    )
+
+    if (
+        ai_assignee
+        and
+        ai_assignee
+        in users_by_slack_id
+    ):
+        return (
+            ai_assignee,
+            "AI_CONTEXT",
+        )
+
+    return (
+        None,
+        "UNRESOLVED",
+    )
+
+
 def detect_task_from_slack_message(
     *,
     db: Session,
@@ -945,9 +1357,36 @@ def detect_task_from_slack_message(
         response.output_text
     )
 
-    return (
+    result = (
         TaskDetectionResult
         .model_validate(
             parsed
         )
     )
+
+    (
+        resolved_assignee,
+        assignee_source,
+    ) = _resolve_assignee(
+        db=db,
+        message=message,
+        result=result,
+    )
+
+    result = result.model_copy(
+        update={
+            "assignee_slack_user_id":
+                resolved_assignee,
+        }
+    )
+
+    print(
+        "[MIRANOAH ASSIGNEE] "
+        f"message={message.id} "
+        f"assignee="
+        f"{resolved_assignee} "
+        f"source="
+        f"{assignee_source}"
+    )
+
+    return result
