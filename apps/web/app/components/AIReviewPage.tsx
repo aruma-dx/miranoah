@@ -59,6 +59,44 @@ type Draft = {
 };
 
 
+type TaskSource = {
+  found: boolean;
+
+  source_type:
+    string | null;
+
+  slack_message_id:
+    string | null;
+
+  slack_channel_id:
+    string | null;
+
+  channel_name:
+    string | null;
+
+  slack_user_id:
+    string | null;
+
+  sender_name:
+    string | null;
+
+  text:
+    string | null;
+
+  message_ts:
+    string | null;
+
+  thread_ts:
+    string | null;
+
+  edited_at:
+    string | null;
+
+  deleted_at:
+    string | null;
+};
+
+
 type Props = {
   apiBaseUrl: string;
 };
@@ -198,6 +236,55 @@ function createDraft(
 }
 
 
+function slackTimeLabel(
+  value: string | null
+) {
+  if (!value) {
+    return "-";
+  }
+
+  const seconds =
+    Number(
+      value
+        .split(".")[0]
+    );
+
+  if (
+    !Number.isFinite(
+      seconds
+    )
+  ) {
+    return value;
+  }
+
+  return new Intl
+    .DateTimeFormat(
+      "ja-JP",
+      {
+        year:
+          "numeric",
+
+        month:
+          "numeric",
+
+        day:
+          "numeric",
+
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+      }
+    )
+    .format(
+      new Date(
+        seconds * 1000
+      )
+    );
+}
+
+
 export default function AIReviewPage({
   apiBaseUrl,
 }: Props) {
@@ -215,8 +302,35 @@ export default function AIReviewPage({
     drafts,
     setDrafts,
   ] = useState<
-    Record<string, Draft>
+    Record<
+      string,
+      Draft
+    >
   >({});
+
+  const [
+    sources,
+    setSources,
+  ] = useState<
+    Record<
+      string,
+      TaskSource
+    >
+  >({});
+
+  const [
+    sourceOpenId,
+    setSourceOpenId,
+  ] = useState<
+    string | null
+  >(null);
+
+  const [
+    sourceLoadingId,
+    setSourceLoadingId,
+  ] = useState<
+    string | null
+  >(null);
 
   const [
     editingId,
@@ -228,7 +342,9 @@ export default function AIReviewPage({
   const [
     loading,
     setLoading,
-  ] = useState(true);
+  ] = useState(
+    true
+  );
 
   const [
     error,
@@ -256,7 +372,9 @@ export default function AIReviewPage({
     useCallback(
       async () => {
         try {
-          setError(null);
+          setError(
+            null
+          );
 
           const [
             reviewsResponse,
@@ -307,12 +425,14 @@ export default function AIReviewPage({
 
           const reviewData:
             Task[] =
-            await reviewsResponse.json();
+            await reviewsResponse
+              .json();
 
 
           const projectData:
             Project[] =
-            await projectsResponse.json();
+            await projectsResponse
+              .json();
 
 
           setCandidates(
@@ -333,7 +453,9 @@ export default function AIReviewPage({
 
 
           reviewData.forEach(
-            (task) => {
+            (
+              task
+            ) => {
               nextDrafts[
                 task.id
               ] =
@@ -356,7 +478,9 @@ export default function AIReviewPage({
           );
 
         } finally {
-          setLoading(false);
+          setLoading(
+            false
+          );
         }
       },
       [
@@ -373,6 +497,96 @@ export default function AIReviewPage({
       loadData,
     ]
   );
+
+
+  async function toggleSource(
+    taskId: string
+  ) {
+    if (
+      sourceOpenId
+      === taskId
+    ) {
+      setSourceOpenId(
+        null
+      );
+
+      return;
+    }
+
+
+    if (
+      !sources[
+        taskId
+      ]
+    ) {
+      try {
+        setSourceLoadingId(
+          taskId
+        );
+
+        setError(
+          null
+        );
+
+
+        const response =
+          await fetch(
+            `${apiBaseUrl}/api/v1/tasks/${taskId}/source`,
+            {
+              credentials:
+                "include",
+
+              cache:
+                "no-store",
+            }
+          );
+
+
+        if (!response.ok) {
+          throw new Error(
+            "Slack出典の取得に失敗しました。"
+          );
+        }
+
+
+        const source:
+          TaskSource =
+          await response
+            .json();
+
+
+        setSources(
+          (
+            current
+          ) => ({
+            ...current,
+
+            [taskId]:
+              source,
+          })
+        );
+
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Slack出典の取得に失敗しました。"
+        );
+
+        return;
+
+      } finally {
+        setSourceLoadingId(
+          null
+        );
+      }
+    }
+
+
+    setSourceOpenId(
+      taskId
+    );
+  }
 
 
   function startEditing(
@@ -430,7 +644,8 @@ export default function AIReviewPage({
   function updateDraft(
     taskId: string,
 
-    key: keyof Draft,
+    key:
+      keyof Draft,
 
     value: string
   ) {
@@ -464,8 +679,13 @@ export default function AIReviewPage({
         task.id
       );
 
-      setError(null);
-      setSuccess(null);
+      setError(
+        null
+      );
+
+      setSuccess(
+        null
+      );
 
 
       const options:
@@ -478,7 +698,9 @@ export default function AIReviewPage({
         };
 
 
-      if (useDraft) {
+      if (
+        useDraft
+      ) {
         const draft =
           drafts[
             task.id
@@ -486,8 +708,11 @@ export default function AIReviewPage({
 
 
         if (
-          !draft ||
-          !draft.title.trim()
+          !draft
+          ||
+          !draft
+            .title
+            .trim()
         ) {
           throw new Error(
             "Task名を入力してください。"
@@ -504,25 +729,32 @@ export default function AIReviewPage({
         options.body =
           JSON.stringify({
             title:
-              draft.title.trim(),
+              draft
+                .title
+                .trim(),
 
             description:
-              draft.description
+              draft
+                .description
                 .trim()
                 || null,
 
             project_id:
-              draft.projectId
+              draft
+                .projectId
                 || null,
 
             priority:
-              draft.priority,
+              draft
+                .priority,
 
             due_at:
-              draft.dueAt
+              draft
+                .dueAt
                 ? new Date(
                     `${draft.dueAt}T23:59:59`
-                  ).toISOString()
+                  )
+                    .toISOString()
                 : null,
           });
       }
@@ -535,7 +767,9 @@ export default function AIReviewPage({
         );
 
 
-      if (!response.ok) {
+      if (
+        !response.ok
+      ) {
         const body =
           await response
             .json()
@@ -546,12 +780,17 @@ export default function AIReviewPage({
 
         throw new Error(
           body?.detail
-          ?? "Taskの承認に失敗しました。"
+          ??
+          "Taskの承認に失敗しました。"
         );
       }
 
 
       setEditingId(
+        null
+      );
+
+      setSourceOpenId(
         null
       );
 
@@ -588,8 +827,13 @@ export default function AIReviewPage({
         taskId
       );
 
-      setError(null);
-      setSuccess(null);
+      setError(
+        null
+      );
+
+      setSuccess(
+        null
+      );
 
 
       const response =
@@ -605,7 +849,9 @@ export default function AIReviewPage({
         );
 
 
-      if (!response.ok) {
+      if (
+        !response.ok
+      ) {
         const body =
           await response
             .json()
@@ -616,7 +862,8 @@ export default function AIReviewPage({
 
         throw new Error(
           body?.detail
-          ?? "Task候補の却下に失敗しました。"
+          ??
+          "Task候補の却下に失敗しました。"
         );
       }
 
@@ -626,6 +873,16 @@ export default function AIReviewPage({
         === taskId
       ) {
         setEditingId(
+          null
+        );
+      }
+
+
+      if (
+        sourceOpenId
+        === taskId
+      ) {
+        setSourceOpenId(
           null
         );
       }
@@ -693,7 +950,7 @@ export default function AIReviewPage({
           className="tagline"
         >
           AIが自動登録を保留したTaskを確認し、
-          必要なら内容を修正して承認できます。
+          元のSlack発言を確認しながら承認できます。
         </p>
       </section>
 
@@ -766,14 +1023,16 @@ export default function AIReviewPage({
           >
 
             {candidates.map(
-              (task) => {
+              (
+                task
+              ) => {
 
                 const project =
                   projects.find(
                     (
-                      project
+                      item
                     ) =>
-                      project.id
+                      item.id
                       ===
                       task.project_id
                   );
@@ -789,6 +1048,18 @@ export default function AIReviewPage({
                   drafts[
                     task.id
                   ];
+
+
+                const source =
+                  sources[
+                    task.id
+                  ];
+
+
+                const sourceIsOpen =
+                  sourceOpenId
+                  ===
+                  task.id;
 
 
                 return (
@@ -835,7 +1106,6 @@ export default function AIReviewPage({
                     >
 
                       <div>
-
                         <span>
                           AI確信度
                         </span>
@@ -845,12 +1115,10 @@ export default function AIReviewPage({
                             task.ai_confidence
                           )}
                         </strong>
-
                       </div>
 
 
                       <div>
-
                         <span>
                           期限判定
                         </span>
@@ -860,12 +1128,10 @@ export default function AIReviewPage({
                             task.deadline_type
                           )}
                         </strong>
-
                       </div>
 
 
                       <div>
-
                         <span>
                           期限確信度
                         </span>
@@ -875,7 +1141,6 @@ export default function AIReviewPage({
                             task.deadline_confidence
                           )}
                         </strong>
-
                       </div>
 
                     </div>
@@ -886,7 +1151,6 @@ export default function AIReviewPage({
                     >
 
                       <div>
-
                         <span>
                           Project
                         </span>
@@ -896,12 +1160,10 @@ export default function AIReviewPage({
                             ??
                             "Projectなし"}
                         </strong>
-
                       </div>
 
 
                       <div>
-
                         <span>
                           優先度
                         </span>
@@ -911,23 +1173,154 @@ export default function AIReviewPage({
                             task.priority
                           )}
                         </strong>
-
                       </div>
 
 
                       <div>
-
                         <span>
-                          AI生成
+                          出典
                         </span>
 
                         <strong>
-                          はい
+                          Slack
                         </strong>
-
                       </div>
 
                     </div>
+
+
+                    <div
+                      className="project-actions"
+                      style={{
+                        marginTop:
+                          "16px",
+                      }}
+                    >
+                      <button
+                        className="secondary-button"
+                        disabled={
+                          sourceLoadingId
+                          ===
+                          task.id
+                        }
+                        onClick={() =>
+                          toggleSource(
+                            task.id
+                          )
+                        }
+                      >
+                        {sourceLoadingId
+                          === task.id
+                          ? "取得中..."
+                          : sourceIsOpen
+                          ? "Slack出典を閉じる"
+                          : "Slack出典を見る"}
+                      </button>
+                    </div>
+
+
+                    {sourceIsOpen && (
+                      <div
+                        style={{
+                          marginTop:
+                            "16px",
+
+                          padding:
+                            "18px",
+
+                          border:
+                            "1px solid currentColor",
+
+                          borderRadius:
+                            "12px",
+                        }}
+                      >
+
+                        {!source ? (
+
+                          <p>
+                            Slack出典を読み込んでいます。
+                          </p>
+
+                        ) : !source.found ? (
+
+                          <p>
+                            元のSlackメッセージを確認できませんでした。
+                          </p>
+
+                        ) : (
+
+                          <>
+
+                            <div
+                              className="section-kicker"
+                            >
+                              SOURCE / SLACK
+                            </div>
+
+
+                            <p>
+                              <strong>
+                                {source.channel_name
+                                  ? `#${source.channel_name}`
+                                  : source.slack_channel_id
+                                  ?? "チャンネル不明"}
+                              </strong>
+
+                              {" ・ "}
+
+                              {source.sender_name
+                                ??
+                                source.slack_user_id
+                                ??
+                                "投稿者不明"}
+
+                              {" ・ "}
+
+                              {slackTimeLabel(
+                                source.message_ts
+                              )}
+                            </p>
+
+
+                            <p
+                              style={{
+                                whiteSpace:
+                                  "pre-wrap",
+
+                                marginTop:
+                                  "12px",
+                              }}
+                            >
+                              {source.text
+                                ??
+                                "本文なし"}
+                            </p>
+
+
+                            {source.edited_at && (
+                              <p
+                                className="panel-description"
+                              >
+                                ※ このSlackメッセージは編集されています。
+                              </p>
+                            )}
+
+
+                            {source.deleted_at && (
+                              <p
+                                className="panel-description"
+                              >
+                                ※ 元のSlackメッセージは削除されています。
+                              </p>
+                            )}
+
+                          </>
+
+                        )}
+
+                      </div>
+                    )}
 
 
                     {isEditing &&
@@ -1039,22 +1432,20 @@ export default function AIReviewPage({
 
                               {projects.map(
                                 (
-                                  project
+                                  item
                                 ) => (
-
                                   <option
                                     key={
-                                      project.id
+                                      item.id
                                     }
                                     value={
-                                      project.id
+                                      item.id
                                     }
                                   >
                                     {
-                                      project.name
+                                      item.name
                                     }
                                   </option>
-
                                 )
                               )}
 
@@ -1092,7 +1483,6 @@ export default function AIReviewPage({
                                 (
                                   priority
                                 ) => (
-
                                   <option
                                     key={
                                       priority
@@ -1105,7 +1495,6 @@ export default function AIReviewPage({
                                       priority
                                     )}
                                   </option>
-
                                 )
                               )}
 
