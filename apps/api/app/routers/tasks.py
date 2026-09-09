@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import (
@@ -6,6 +7,7 @@ from fastapi import (
     HTTPException,
     Query,
 )
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,8 @@ from app.core.dependencies import (
 from app.db.session import get_db
 from app.models.core import (
     Project,
+    SlackChannel,
+    SlackMessage,
     Task,
     User,
 )
@@ -44,6 +48,74 @@ router = APIRouter(
 )
 
 
+class TaskSourceRead(
+    BaseModel
+):
+    found: bool
+
+    source_type: str | None = None
+
+    slack_message_id:
+        UUID | None = None
+
+    slack_channel_id:
+        str | None = None
+
+    channel_name:
+        str | None = None
+
+    slack_user_id:
+        str | None = None
+
+    sender_name:
+        str | None = None
+
+    text:
+        str | None = None
+
+    message_ts:
+        str | None = None
+
+    thread_ts:
+        str | None = None
+
+    edited_at:
+        datetime | None = None
+
+    deleted_at:
+        datetime | None = None
+
+
+def _get_visible_task(
+    *,
+    db: Session,
+    current_user: CurrentUser,
+    task_id: UUID,
+) -> Task:
+    stmt = select(
+        Task
+    ).where(
+        Task.id == task_id
+    )
+
+    stmt = apply_task_view_scope(
+        stmt=stmt,
+        current_user=current_user,
+    )
+
+    task = db.scalar(
+        stmt
+    )
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    return task
+
+
 @router.get(
     "",
     response_model=list[TaskRead],
@@ -56,12 +128,16 @@ def list_tasks(
         ge=1,
         le=500,
     ),
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
 ):
-    stmt = select(Task)
+    stmt = select(
+        Task
+    )
 
     stmt = apply_task_view_scope(
         stmt=stmt,
@@ -83,14 +159,20 @@ def list_tasks(
     stmt = (
         stmt
         .order_by(
-            Task.due_at.asc().nullslast(),
+            Task.due_at
+            .asc()
+            .nullslast(),
             Task.created_at.desc(),
         )
-        .limit(limit)
+        .limit(
+            limit
+        )
     )
 
     return list(
-        db.scalars(stmt)
+        db.scalars(
+            stmt
+        )
     )
 
 
@@ -101,14 +183,18 @@ def list_tasks(
 )
 def create_task(
     data: TaskCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
 ):
     if data.project_id is not None:
         project_stmt = (
-            select(Project).where(
+            select(
+                Project
+            ).where(
                 Project.id
                 == data.project_id
             )
@@ -128,7 +214,9 @@ def create_task(
         if project is None:
             raise HTTPException(
                 status_code=404,
-                detail="Project not found",
+                detail=(
+                    "Project not found"
+                ),
             )
 
         allowed = (
@@ -152,7 +240,9 @@ def create_task(
     if not allowed:
         raise HTTPException(
             status_code=403,
-            detail="Insufficient permission.",
+            detail=(
+                "Insufficient permission."
+            ),
         )
 
     if data.requester_id is not None:
@@ -168,7 +258,9 @@ def create_task(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid requester.",
+                detail=(
+                    "Invalid requester."
+                ),
             )
 
     if data.owner_id is not None:
@@ -184,7 +276,9 @@ def create_task(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid owner.",
+                detail=(
+                    "Invalid owner."
+                ),
             )
 
     task = Task(
@@ -192,14 +286,150 @@ def create_task(
             current_user.workspace_id
         ),
         **data.model_dump(),
-        status=TaskStatus.NOT_STARTED,
+        status=(
+            TaskStatus.NOT_STARTED
+        ),
     )
 
-    db.add(task)
+    db.add(
+        task
+    )
+
     db.commit()
-    db.refresh(task)
+
+    db.refresh(
+        task
+    )
 
     return task
+
+
+@router.get(
+    "/{task_id}/source",
+    response_model=TaskSourceRead,
+)
+def get_task_source(
+    task_id: UUID,
+    db: Session = Depends(
+        get_db
+    ),
+    current_user: CurrentUser = Depends(
+        get_current_user
+    ),
+):
+    task = _get_visible_task(
+        db=db,
+        current_user=current_user,
+        task_id=task_id,
+    )
+
+    fingerprint = (
+        task.task_fingerprint
+        or ""
+    )
+
+    if not fingerprint.startswith(
+        "slack:"
+    ):
+        return TaskSourceRead(
+            found=False,
+        )
+
+    raw_message_id = (
+        fingerprint
+        .removeprefix(
+            "slack:"
+        )
+        .strip()
+    )
+
+    try:
+        slack_message_id = UUID(
+            raw_message_id
+        )
+
+    except ValueError:
+        return TaskSourceRead(
+            found=False,
+        )
+
+    message = db.get(
+        SlackMessage,
+        slack_message_id,
+    )
+
+    if (
+        message is None
+        or message.workspace_id
+        != current_user.workspace_id
+    ):
+        return TaskSourceRead(
+            found=False,
+        )
+
+    channel = db.scalar(
+        select(
+            SlackChannel
+        ).where(
+            SlackChannel.workspace_id
+            == current_user.workspace_id,
+            SlackChannel.slack_channel_id
+            == message.slack_channel_id,
+        )
+    )
+
+    sender = None
+
+    if message.slack_user_id:
+        sender = db.scalar(
+            select(
+                User
+            ).where(
+                User.workspace_id
+                == current_user.workspace_id,
+                User.slack_user_id
+                == message.slack_user_id,
+            )
+        )
+
+    return TaskSourceRead(
+        found=True,
+        source_type="SLACK",
+        slack_message_id=(
+            message.id
+        ),
+        slack_channel_id=(
+            message.slack_channel_id
+        ),
+        channel_name=(
+            channel.name
+            if channel
+            else None
+        ),
+        slack_user_id=(
+            message.slack_user_id
+        ),
+        sender_name=(
+            sender.display_name
+            if sender
+            else None
+        ),
+        text=(
+            message.text
+        ),
+        message_ts=(
+            message.message_ts
+        ),
+        thread_ts=(
+            message.thread_ts
+        ),
+        edited_at=(
+            message.edited_at
+        ),
+        deleted_at=(
+            message.deleted_at
+        ),
+    )
 
 
 @router.get(
@@ -208,29 +438,18 @@ def create_task(
 )
 def get_task(
     task_id: UUID,
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
 ):
-    stmt = select(Task).where(
-        Task.id == task_id
-    )
-
-    stmt = apply_task_view_scope(
-        stmt=stmt,
+    return _get_visible_task(
+        db=db,
         current_user=current_user,
+        task_id=task_id,
     )
-
-    task = db.scalar(stmt)
-
-    if task is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found",
-        )
-
-    return task
 
 
 @router.patch(
@@ -240,27 +459,18 @@ def get_task(
 def update_task(
     task_id: UUID,
     data: TaskUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
     current_user: CurrentUser = Depends(
         get_current_user
     ),
 ):
-    stmt = select(Task).where(
-        Task.id == task_id
-    )
-
-    stmt = apply_task_view_scope(
-        stmt=stmt,
+    task = _get_visible_task(
+        db=db,
         current_user=current_user,
+        task_id=task_id,
     )
-
-    task = db.scalar(stmt)
-
-    if task is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found",
-        )
 
     allowed = (
         has_task_edit_permission(
@@ -273,7 +483,9 @@ def update_task(
     if not allowed:
         raise HTTPException(
             status_code=403,
-            detail="Insufficient permission.",
+            detail=(
+                "Insufficient permission."
+            ),
         )
 
     payload = data.model_dump(
@@ -281,13 +493,16 @@ def update_task(
     )
 
     if (
-        "owner_id" in payload
+        "owner_id"
+        in payload
         and payload["owner_id"]
         is not None
     ):
         owner = db.get(
             User,
-            payload["owner_id"],
+            payload[
+                "owner_id"
+            ],
         )
 
         if (
@@ -297,10 +512,15 @@ def update_task(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid owner.",
+                detail=(
+                    "Invalid owner."
+                ),
             )
 
-    for key, value in payload.items():
+    for (
+        key,
+        value,
+    ) in payload.items():
         setattr(
             task,
             key,
@@ -308,6 +528,9 @@ def update_task(
         )
 
     db.commit()
-    db.refresh(task)
+
+    db.refresh(
+        task
+    )
 
     return task
