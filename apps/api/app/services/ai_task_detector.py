@@ -5,8 +5,14 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from openai import OpenAI
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from pydantic import (
+    BaseModel,
+    Field,
+)
+from sqlalchemy import (
+    or_,
+    select,
+)
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -18,7 +24,18 @@ from app.models.core import (
 )
 
 
-class TaskDetectionResult(BaseModel):
+# 通常チャンネル会話では
+# 対象メッセージより前の何件を見るか
+CHANNEL_CONTEXT_LIMIT = 5
+
+# スレッドでは親投稿を含め
+# 最大何件を見るか
+THREAD_CONTEXT_LIMIT = 20
+
+
+class TaskDetectionResult(
+    BaseModel
+):
     is_task: bool
 
     confidence: float = Field(
@@ -27,19 +44,26 @@ class TaskDetectionResult(BaseModel):
     )
 
     title: str | None = None
+
     description: str | None = None
 
     assignee_slack_user_id: (
         str | None
     ) = None
 
-    project_id: str | None = None
+    project_id: (
+        str | None
+    ) = None
 
     priority: str = "MEDIUM"
 
-    due_at: datetime | None = None
+    due_at: (
+        datetime | None
+    ) = None
 
-    deadline_type: str | None = None
+    deadline_type: (
+        str | None
+    ) = None
 
     deadline_confidence: (
         float | None
@@ -52,42 +76,51 @@ class TaskDetectionResult(BaseModel):
 
 TASK_DETECTION_SCHEMA = {
     "type": "object",
+
     "additionalProperties": False,
+
     "properties": {
         "is_task": {
             "type": "boolean",
         },
+
         "confidence": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
         },
+
         "title": {
             "type": [
                 "string",
                 "null",
             ],
         },
+
         "description": {
             "type": [
                 "string",
                 "null",
             ],
         },
+
         "assignee_slack_user_id": {
             "type": [
                 "string",
                 "null",
             ],
         },
+
         "project_id": {
             "type": [
                 "string",
                 "null",
             ],
         },
+
         "priority": {
             "type": "string",
+
             "enum": [
                 "LOW",
                 "MEDIUM",
@@ -95,17 +128,20 @@ TASK_DETECTION_SCHEMA = {
                 "CRITICAL",
             ],
         },
+
         "due_at": {
             "type": [
                 "string",
                 "null",
             ],
         },
+
         "deadline_type": {
             "type": [
                 "string",
                 "null",
             ],
+
             "enum": [
                 "EXPLICIT",
                 "RELATIVE",
@@ -115,15 +151,18 @@ TASK_DETECTION_SCHEMA = {
                 None,
             ],
         },
+
         "deadline_confidence": {
             "type": [
                 "number",
                 "null",
             ],
+
             "minimum": 0,
             "maximum": 1,
         },
     },
+
     "required": [
         "is_task",
         "confidence",
@@ -142,11 +181,29 @@ TASK_DETECTION_SCHEMA = {
 SYSTEM_INSTRUCTIONS = """
 あなたはMIRANOAHのTask Detectorです。
 
-Slackメッセージから、
-実際に誰かが対応する必要のある仕事・依頼・約束・Todo
-が存在するか判定してください。
+Slack上の対象メッセージと、その前後関係を理解するための
+会話コンテキストが与えられます。
+
+対象メッセージを中心に、
+実際に誰かが対応する必要のある
+仕事・依頼・約束・Todoが存在するか判定してください。
+
+
+【最重要】
+
+conversation_contextは、
+対象メッセージの意味を理解するための補助情報です。
+
+Task化するかどうかは、
+target_messageを中心に判断してください。
+
+過去の会話にTaskが存在するだけで、
+今回のtarget_messageまで
+新しいTaskとして登録してはいけません。
+
 
 Taskと判定する例:
+
 - ○○をお願いします
 - ○日までに○○してください
 - 自分が○○をやります
@@ -155,7 +212,26 @@ Taskと判定する例:
 - ○○さん、これ対応できますか
 - 次回までに○○を準備する
 
+また、対象メッセージ単体では意味が不足していても、
+直前の会話やスレッドから作業内容が明確になる場合は、
+文脈を補完してTaskとして判定してよい。
+
+例:
+
+A:
+「企画書の修正版どうなっていますか？」
+
+B:
+「今日中にやります」
+
+この場合、
+target_messageがBの発言なら、
+「企画書の修正版を今日中に対応する」
+というTaskとして解釈できる。
+
+
 Taskではない例:
+
 - 単なる質問
 - 雑談
 - 感想
@@ -163,59 +239,124 @@ Taskではない例:
 - 既に完了した仕事の報告
 - 情報共有だけ
 - 挨拶
+- 過去Taskに対する単なる了解
+- 「ありがとうございます」
+- 「確認しました」だけ
+- conversation_contextにTaskがあるだけで、
+  target_message自身には新しい依頼・約束・対応がない場合
+
 
 重要ルール:
+
 
 1.
 Taskかどうかを最優先で判定する。
 
+
 2.
 titleは、
+会話コンテキストを踏まえて、
+
 「誰が読んでも何をするか分かる」
+
 短い日本語にする。
 
+「これをやる」
+「確認する」
+など、
+対象が分からないタイトルは禁止。
+
+コンテキストから対象を具体化する。
+
+
 3.
-担当者はSlack本文で明示されている場合、
-または発言者本人が明確に
-「自分がやる」と宣言した場合だけ設定する。
+descriptionには必要に応じて、
+Taskを理解するための補足を書く。
+
+無理に長文化しない。
+
+
+4.
+担当者は、
+
+- Slack本文で明示されている
+- 会話コンテキストから
+  誰に依頼しているか明確
+- 発言者本人が
+  「自分がやる」と明確に宣言
+
+のいずれかの場合だけ設定する。
 
 推測だけで担当者を決めない。
 
-4.
-project_idは候補Projectとの関連性が
-明確な場合だけ設定する。
+
+5.
+メンション表現
+<@SLACK_USER_ID>
+が存在する場合は、
+workspace_usersから対応する人物を確認する。
+
+Slack User IDは必ず
+workspace_usersに存在するIDだけを使用する。
+
+
+6.
+project_idは、
+Project候補との関連性が明確な場合だけ設定する。
+
+target_messageだけでは分からなくても、
+conversation_contextから
+Projectが明確に特定できる場合は設定してよい。
 
 曖昧ならnull。
 
-5.
+
+7.
 期限について:
 
-本文に
+対象メッセージまたは、
+その対象メッセージが参照している会話に
+
 「9/10まで」
 「明日」
 「来週火曜」
 「金曜まで」
+「今日中」
+
 など明示的・相対的な期限がある場合、
 現在日時を基準にdue_atへ変換する。
+
 
 直接日付が書かれている:
 EXPLICIT
 
-明日・来週火曜等:
+
+明日・今日中・来週火曜等:
 RELATIVE
+
 
 カレンダー上のイベント等を基準:
 CALENDAR_BASED
 
-本文に期限が書かれていないのに、
+
+期限が明示されていないのに、
 AIが合理的な期限を推測した場合:
 AI_INFERRED
 
+
 期限を設定できない場合:
+
 due_at=null
 deadline_type=null
 
-6.
+
+8.
+会話内で古い期限と新しい期限が競合する場合、
+target_messageに最も近い、
+最新の明確な期限を優先する。
+
+
+9.
 priority:
 
 通常:
@@ -230,19 +371,60 @@ CRITICAL
 低優先と明示:
 LOW
 
-7.
+
+10.
 confidenceは、
-このメッセージをTaskとして登録してよい確信度。
 
-依頼・期限・担当などが明確なら高くする。
+「conversation_contextを含めて考えた結果、
+このtarget_messageからTaskを登録してよい確信度」
 
-曖昧な会話では低くする。
+として評価する。
 
-8.
+
+依頼内容・担当者・期限などが明確:
+高いconfidence
+
+
+会話から内容をかなり推測する必要がある:
+低めのconfidence
+
+
+11.
+conversation_context内で、
+target_messageには
+
+"is_target": true
+
+が付いています。
+
+必ずこのメッセージを中心に判定する。
+
+
+12.
 Slack IDやProject IDは、
 与えられた候補に存在するものだけ使用する。
 
 絶対にIDを作らない。
+
+
+13.
+同じ会話の過去メッセージで既に依頼があり、
+target_messageが単なる
+
+「了解です」
+「承知しました」
+「ありがとうございます」
+
+だけの場合は、
+新しいTaskとして重複登録しない。
+
+ただし、
+
+「了解です。今日中に対応します」
+
+のように、
+target_messageで明確な実行約束が追加された場合は
+Taskとして扱ってよい。
 """.strip()
 
 
@@ -257,7 +439,10 @@ def _get_users(
             .where(
                 User.workspace_id
                 == workspace_id,
-                User.is_active.is_(True),
+
+                User.is_active.is_(
+                    True
+                ),
             )
             .order_by(
                 User.display_name.asc()
@@ -267,16 +452,43 @@ def _get_users(
 
     return [
         {
-            "slack_user_id": (
-                user.slack_user_id
-            ),
-            "display_name": (
-                user.display_name
-            ),
+            "slack_user_id":
+                user.slack_user_id,
+
+            "display_name":
+                user.display_name,
         }
         for user in users
         if user.slack_user_id
     ]
+
+
+def _get_user_map(
+    *,
+    db: Session,
+    workspace_id,
+) -> dict[str, str]:
+    users = list(
+        db.scalars(
+            select(User).where(
+                User.workspace_id
+                == workspace_id,
+
+                User.is_active.is_(
+                    True
+                ),
+            )
+        )
+    )
+
+    return {
+        user.slack_user_id:
+            user.display_name
+
+        for user in users
+
+        if user.slack_user_id
+    }
 
 
 def _get_projects(
@@ -300,13 +512,19 @@ def _get_projects(
 
     return [
         {
-            "id": str(project.id),
-            "name": project.name,
-            "description": (
-                project.description
-            ),
+            "id":
+                str(
+                    project.id
+                ),
+
+            "name":
+                project.name,
+
+            "description":
+                project.description,
         }
-        for project in projects
+        for project
+        in projects
     ]
 
 
@@ -322,6 +540,7 @@ def _get_sender(
         select(User).where(
             User.workspace_id
             == message.workspace_id,
+
             User.slack_user_id
             == message.slack_user_id,
         )
@@ -329,19 +548,19 @@ def _get_sender(
 
     if user is None:
         return {
-            "slack_user_id": (
-                message.slack_user_id
-            ),
-            "display_name": None,
+            "slack_user_id":
+                message.slack_user_id,
+
+            "display_name":
+                None,
         }
 
     return {
-        "slack_user_id": (
-            user.slack_user_id
-        ),
-        "display_name": (
-            user.display_name
-        ),
+        "slack_user_id":
+            user.slack_user_id,
+
+        "display_name":
+            user.display_name,
     }
 
 
@@ -351,23 +570,244 @@ def _get_channel(
     message: SlackMessage,
 ) -> dict:
     channel = db.scalar(
-        select(SlackChannel).where(
+        select(
+            SlackChannel
+        ).where(
             SlackChannel.workspace_id
             == message.workspace_id,
+
             SlackChannel.slack_channel_id
             == message.slack_channel_id,
         )
     )
 
     return {
-        "slack_channel_id": (
-            message.slack_channel_id
-        ),
+        "slack_channel_id":
+            message.slack_channel_id,
+
         "name": (
             channel.name
             if channel is not None
             else None
         ),
+    }
+
+
+def _serialize_message(
+    *,
+    message: SlackMessage,
+    user_map: dict[str, str],
+    target_message_id,
+) -> dict:
+    sender_name = None
+
+    if message.slack_user_id:
+        sender_name = user_map.get(
+            message.slack_user_id
+        )
+
+    return {
+        "id":
+            str(
+                message.id
+            ),
+
+        "message_ts":
+            message.message_ts,
+
+        "thread_ts":
+            message.thread_ts,
+
+        "slack_user_id":
+            message.slack_user_id,
+
+        "sender_name":
+            sender_name,
+
+        "text":
+            message.text,
+
+        "is_target":
+            message.id
+            == target_message_id,
+    }
+
+
+def _get_thread_context(
+    *,
+    db: Session,
+    message: SlackMessage,
+    user_map: dict[str, str],
+) -> list[dict]:
+    root_ts = (
+        message.thread_ts
+        or message.message_ts
+    )
+
+    stmt = (
+        select(
+            SlackMessage
+        )
+        .where(
+            SlackMessage.workspace_id
+            == message.workspace_id,
+
+            SlackMessage.slack_channel_id
+            == message.slack_channel_id,
+
+            SlackMessage.deleted_at.is_(
+                None
+            ),
+
+            SlackMessage.message_ts
+            <= message.message_ts,
+
+            or_(
+                SlackMessage.message_ts
+                == root_ts,
+
+                SlackMessage.thread_ts
+                == root_ts,
+            ),
+        )
+        .order_by(
+            SlackMessage.message_ts.asc()
+        )
+        .limit(
+            THREAD_CONTEXT_LIMIT
+        )
+    )
+
+    messages = list(
+        db.scalars(
+            stmt
+        )
+    )
+
+    return [
+        _serialize_message(
+            message=item,
+            user_map=user_map,
+            target_message_id=(
+                message.id
+            ),
+        )
+        for item
+        in messages
+    ]
+
+
+def _get_channel_context(
+    *,
+    db: Session,
+    message: SlackMessage,
+    user_map: dict[str, str],
+) -> list[dict]:
+    previous_stmt = (
+        select(
+            SlackMessage
+        )
+        .where(
+            SlackMessage.workspace_id
+            == message.workspace_id,
+
+            SlackMessage.slack_channel_id
+            == message.slack_channel_id,
+
+            SlackMessage.deleted_at.is_(
+                None
+            ),
+
+            SlackMessage.message_ts
+            < message.message_ts,
+
+            SlackMessage.thread_ts.is_(
+                None
+            ),
+        )
+        .order_by(
+            SlackMessage.message_ts.desc()
+        )
+        .limit(
+            CHANNEL_CONTEXT_LIMIT
+        )
+    )
+
+    previous_messages = list(
+        db.scalars(
+            previous_stmt
+        )
+    )
+
+    previous_messages.reverse()
+
+    messages = [
+        *previous_messages,
+        message,
+    ]
+
+    return [
+        _serialize_message(
+            message=item,
+            user_map=user_map,
+            target_message_id=(
+                message.id
+            ),
+        )
+        for item
+        in messages
+    ]
+
+
+def _get_conversation_context(
+    *,
+    db: Session,
+    message: SlackMessage,
+) -> dict:
+    user_map = _get_user_map(
+        db=db,
+        workspace_id=(
+            message.workspace_id
+        ),
+    )
+
+    if message.thread_ts:
+        messages = (
+            _get_thread_context(
+                db=db,
+                message=message,
+                user_map=user_map,
+            )
+        )
+
+        context_type = (
+            "THREAD"
+        )
+
+    else:
+        messages = (
+            _get_channel_context(
+                db=db,
+                message=message,
+                user_map=user_map,
+            )
+        )
+
+        context_type = (
+            "CHANNEL_RECENT"
+        )
+
+    return {
+        "context_type":
+            context_type,
+
+        "message_count":
+            len(
+                messages
+            ),
+
+        "messages":
+            messages,
     }
 
 
@@ -387,44 +827,73 @@ def detect_task_from_slack_message(
         )
     )
 
+    conversation_context = (
+        _get_conversation_context(
+            db=db,
+            message=message,
+        )
+    )
+
     context = {
-        "current_datetime_jst": (
-            now_jst.isoformat()
-        ),
-        "message": {
-            "text": message.text,
-            "message_ts": (
-                message.message_ts
-            ),
-            "thread_ts": (
-                message.thread_ts
-            ),
+        "current_datetime_jst":
+            now_jst.isoformat(),
+
+        "target_message": {
+            "id":
+                str(
+                    message.id
+                ),
+
+            "text":
+                message.text,
+
+            "message_ts":
+                message.message_ts,
+
+            "thread_ts":
+                message.thread_ts,
         },
-        "sender": _get_sender(
-            db=db,
-            message=message,
-        ),
-        "channel": _get_channel(
-            db=db,
-            message=message,
-        ),
-        "workspace_users": (
+
+        "conversation_context":
+            conversation_context,
+
+        "sender":
+            _get_sender(
+                db=db,
+                message=message,
+            ),
+
+        "channel":
+            _get_channel(
+                db=db,
+                message=message,
+            ),
+
+        "workspace_users":
             _get_users(
                 db=db,
                 workspace_id=(
                     message.workspace_id
                 ),
-            )
-        ),
-        "project_candidates": (
+            ),
+
+        "project_candidates":
             _get_projects(
                 db=db,
                 workspace_id=(
                     message.workspace_id
                 ),
-            )
-        ),
+            ),
     }
+
+    print(
+        "[MIRANOAH CONTEXT] "
+        f"message={message.id} "
+        f"type="
+        f"{conversation_context['context_type']} "
+        f"messages="
+        f"{conversation_context['message_count']}"
+    )
 
     client = OpenAI(
         api_key=(
@@ -432,30 +901,39 @@ def detect_task_from_slack_message(
         )
     )
 
-    response = client.responses.create(
-        model=(
-            settings.openai_model_fast
-        ),
-        instructions=(
-            SYSTEM_INSTRUCTIONS
-        ),
-        input=json.dumps(
-            context,
-            ensure_ascii=False,
-        ),
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": (
-                    "miranoah_task_detection"
-                ),
-                "strict": True,
-                "schema": (
-                    TASK_DETECTION_SCHEMA
-                ),
-            }
-        },
-        store=False,
+    response = (
+        client.responses.create(
+            model=(
+                settings.openai_model_fast
+            ),
+
+            instructions=(
+                SYSTEM_INSTRUCTIONS
+            ),
+
+            input=json.dumps(
+                context,
+                ensure_ascii=False,
+            ),
+
+            text={
+                "format": {
+                    "type":
+                        "json_schema",
+
+                    "name":
+                        "miranoah_task_detection",
+
+                    "strict":
+                        True,
+
+                    "schema":
+                        TASK_DETECTION_SCHEMA,
+                }
+            },
+
+            store=False,
+        )
     )
 
     if not response.output_text:
@@ -469,5 +947,7 @@ def detect_task_from_slack_message(
 
     return (
         TaskDetectionResult
-        .model_validate(parsed)
+        .model_validate(
+            parsed
+        )
     )
